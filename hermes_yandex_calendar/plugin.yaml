@@ -1,0 +1,20 @@
+name: yandex_calendar
+version: 0.1.0
+description: "List, create, update, and delete Yandex Calendar events over CalDAV (attendees, busy status, multiple calendars). Requires YANDEX_CALENDAR_LOGIN and YANDEX_CALENDAR_APP_PASSWORD."
+author: akinfold
+kind: standalone
+provides_tools:
+  - yandex_calendar_list_calendars
+  - yandex_calendar_list_events
+  - yandex_calendar_create_event
+  - yandex_calendar_update_event
+  - yandex_calendar_respond_event
+  - yandex_calendar_move_event
+  - yandex_calendar_delete_event
+requires_env:
+  - key: YANDEX_CALENDAR_LOGIN
+    prompt: "Yandex login / email (e.g. you@yandex.ru)"
+    url: "https://id.yandex.ru/security/app-passwords"
+  - key: YANDEX_CALENDAR_APP_PASSWORD
+    prompt: "Yandex app password for CalDAV"
+    url: "https://id.yandex.ru/security/app-passwords"

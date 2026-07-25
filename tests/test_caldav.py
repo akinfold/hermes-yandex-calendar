@@ -1,0 +1,439 @@
+"""Unit tests for the CalDAV client using httpx.MockTransport (no network)."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from hermes_yandex_calendar.caldav import CalDAVError, YandexCalDAVClient
+from hermes_yandex_calendar.ical import Event
+
+MULTISTATUS_CALENDARS = """<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+    <d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-42/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>My Calendar</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+REPORT_EVENTS = """<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-42/evt-1.ics</d:href>
+    <d:propstat><d:prop><c:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:evt-1
+SUMMARY:Meeting
+DTSTART:20260725T140000Z
+DTEND:20260725T150000Z
+END:VEVENT
+END:VCALENDAR</c:calendar-data></d:prop>
+    <d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+
+TWO_CALENDARS = """<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-42/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Work</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-99/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Personal</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+EVENT_ICS = """BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:evt-1
+SUMMARY:Meeting
+DTSTART:20260725T140000Z
+DTEND:20260725T150000Z
+END:VEVENT
+END:VCALENDAR"""
+
+
+def make_client(handler, *, allowed=None) -> YandexCalDAVClient:
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport)
+    return YandexCalDAVClient("user@yandex.ru", "app-pw", client=http, allowed_calendars=allowed)
+
+
+def test_discover_calendars_filters_non_calendars():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PROPFIND"
+        assert request.headers["Depth"] == "1"
+        assert request.url.path == "/calendars/user@yandex.ru/"
+        return httpx.Response(207, text=MULTISTATUS_CALENDARS)
+
+    calendars = make_client(handler).discover_calendars()
+    assert len(calendars) == 1
+    assert calendars[0].href == "/calendars/user@yandex.ru/events-42/"
+    assert calendars[0].display_name == "My Calendar"
+
+
+def test_list_events_uses_default_calendar_and_parses():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=MULTISTATUS_CALENDARS)
+        assert request.method == "REPORT"
+        assert request.url.path == "/calendars/user@yandex.ru/events-42/"
+        body = request.content.decode()
+        assert "time-range" in body and "20260725T000000Z" in body
+        return httpx.Response(207, text=REPORT_EVENTS)
+
+    client = make_client(handler)
+    events = client.list_events(
+        datetime(2026, 7, 25, tzinfo=UTC),
+        datetime(2026, 7, 26, tzinfo=UTC),
+    )
+    assert len(events) == 1
+    assert events[0].summary == "Meeting"
+    assert events[0].href == "/calendars/user@yandex.ru/events-42/evt-1.ics"
+
+
+def test_create_event_puts_ics():
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=MULTISTATUS_CALENDARS)
+        assert request.method == "PUT"
+        assert request.headers["If-None-Match"] == "*"
+        seen["path"] = request.url.path
+        seen["body"] = request.content.decode()
+        return httpx.Response(201)
+
+    client = make_client(handler)
+    event = Event(
+        uid="new-1",
+        summary="Call",
+        start=datetime(2026, 7, 25, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 7, 25, 11, 0, tzinfo=UTC),
+    )
+    created = client.create_event(event)
+    assert created.href == "/calendars/user@yandex.ru/events-42/new-1.ics"
+    assert "BEGIN:VEVENT" in seen["body"]
+    assert seen["path"] == "/calendars/user@yandex.ru/events-42/new-1.ics"
+
+
+def test_create_event_generates_uid_when_missing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=MULTISTATUS_CALENDARS)
+        return httpx.Response(201)
+
+    created = make_client(handler).create_event(Event(uid="", summary="x"))
+    assert created.uid.endswith("@hermes-yandex-calendar")
+
+
+def test_delete_event():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/calendars/user@yandex.ru/events-42/evt-1.ics"
+        return httpx.Response(204)
+
+    make_client(handler).delete_event("/calendars/user@yandex.ru/events-42/evt-1.ics")
+
+
+def test_delete_missing_href_raises():
+    client = make_client(lambda r: httpx.Response(204))
+    with pytest.raises(CalDAVError):
+        client.delete_event("")
+
+
+def test_auth_failure_raises_caldaverror():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401)
+
+    with pytest.raises(CalDAVError, match="Authentication failed"):
+        make_client(handler).discover_calendars()
+
+
+def test_transport_error_wrapped():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    with pytest.raises(CalDAVError, match="request failed"):
+        make_client(handler).discover_calendars()
+
+
+def test_no_calendars_raises():
+    empty = """<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"></d:multistatus>"""
+    client = make_client(lambda r: httpx.Response(207, text=empty))
+    with pytest.raises(CalDAVError, match="No calendars"):
+        client.default_calendar_href()
+
+
+def test_discovery_http_error_status():
+    client = make_client(lambda r: httpx.Response(500, text="boom"))
+    with pytest.raises(CalDAVError, match="discovery failed: HTTP 500"):
+        client.discover_calendars()
+
+
+def test_malformed_discovery_xml():
+    client = make_client(lambda r: httpx.Response(207, text="<<not xml"))
+    with pytest.raises(CalDAVError, match="parse discovery"):
+        client.discover_calendars()
+
+
+def test_list_events_explicit_href_http_error():
+    client = make_client(lambda r: httpx.Response(403))
+    with pytest.raises(CalDAVError, match="Authentication failed"):
+        client.list_events(
+            datetime(2026, 7, 25, tzinfo=UTC),
+            datetime(2026, 7, 26, tzinfo=UTC),
+            calendar="/calendars/user@yandex.ru/events-42/",
+        )
+
+
+def test_list_events_report_status_error():
+    client = make_client(lambda r: httpx.Response(500))
+    with pytest.raises(CalDAVError, match="Listing events failed: HTTP 500"):
+        client.list_events(
+            datetime(2026, 7, 25, tzinfo=UTC),
+            datetime(2026, 7, 26, tzinfo=UTC),
+            calendar="/cal/",
+        )
+
+
+def test_create_event_bad_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(412)  # precondition failed (If-None-Match)
+
+    client = make_client(handler)
+    with pytest.raises(CalDAVError, match="Creating event failed: HTTP 412"):
+        client.create_event(Event(uid="x", summary="y"), calendar="/cal/")
+
+
+def test_delete_tolerates_404():
+    client = make_client(lambda r: httpx.Response(404))
+    client.delete_event("/cal/gone.ics")  # already-absent is not an error
+
+
+def test_delete_bad_status():
+    client = make_client(lambda r: httpx.Response(500))
+    with pytest.raises(CalDAVError, match="Deleting event failed: HTTP 500"):
+        client.delete_event("/cal/x.ics")
+
+
+def test_url_accepts_absolute_and_relative(monkeypatch):
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(204)
+
+    client = make_client(handler)
+    client.delete_event("https://other.example/full/path.ics")
+    client.delete_event("relative/path.ics")
+    assert seen[0] == "https://other.example/full/path.ics"
+    assert seen[1] == "https://caldav.yandex.ru/relative/path.ics"
+
+
+def test_list_calendars_applies_allow_list():
+    client = make_client(lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["Personal"])
+    cals = client.list_calendars()
+    assert [c.display_name for c in cals] == ["Personal"]
+
+
+def test_resolve_calendar_by_name():
+    client = make_client(lambda r: httpx.Response(207, text=TWO_CALENDARS))
+    assert client.resolve_calendar_href("personal") == "/calendars/user@yandex.ru/events-99/"
+    # last path segment also resolves
+    assert client.resolve_calendar_href("events-42") == "/calendars/user@yandex.ru/events-42/"
+
+
+def test_resolve_default_is_first():
+    client = make_client(lambda r: httpx.Response(207, text=TWO_CALENDARS))
+    assert client.resolve_calendar_href(None) == "/calendars/user@yandex.ru/events-42/"
+
+
+def test_resolve_unknown_calendar_raises_with_names():
+    client = make_client(lambda r: httpx.Response(207, text=TWO_CALENDARS))
+    with pytest.raises(CalDAVError) as exc:
+        client.resolve_calendar_href("Nope")
+    assert "not found. Available calendars: 'Work', 'Personal'" in str(exc.value)
+
+
+def test_resolve_explicit_href_skips_discovery_when_no_allow_list():
+    calls = {"propfind": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            calls["propfind"] += 1
+        return httpx.Response(207, text=TWO_CALENDARS)
+
+    client = make_client(handler)
+    assert client.resolve_calendar_href("/calendars/user@yandex.ru/events-42/").endswith(
+        "events-42/"
+    )
+    assert calls["propfind"] == 0  # no discovery round-trip
+
+
+def test_allow_list_forces_validation_of_explicit_ref():
+    client = make_client(lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["Work"])
+    # Personal exists but is not allowed -> rejected
+    with pytest.raises(CalDAVError, match="not found"):
+        client.resolve_calendar_href("Personal")
+
+
+def test_get_event_parses():
+    client = make_client(lambda r: httpx.Response(200, text=EVENT_ICS))
+    event = client.get_event("/calendars/user@yandex.ru/events-42/evt-1.ics")
+    assert event is not None
+    assert event.summary == "Meeting"
+    assert event.href == "/calendars/user@yandex.ru/events-42/evt-1.ics"
+
+
+def test_get_event_404_returns_none():
+    client = make_client(lambda r: httpx.Response(404))
+    assert client.get_event("/cal/gone.ics") is None
+
+
+def test_update_event_puts_without_if_none_match():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["inm"] = request.headers.get("If-None-Match")
+        seen["body"] = request.content.decode()
+        return httpx.Response(204)
+
+    client = make_client(handler)
+    event = Event(uid="evt-1", summary="Updated")
+    updated = client.update_event(event, "/cal/evt-1.ics")
+    assert seen["method"] == "PUT"
+    assert seen["inm"] is None  # update overwrites, must not send If-None-Match
+    assert "SUMMARY:Updated" in seen["body"]
+    assert updated.href == "/cal/evt-1.ics"
+
+
+def test_create_with_attendees_defaults_organizer():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=MULTISTATUS_CALENDARS)
+        assert "ORGANIZER:mailto:user@yandex.ru" in request.content.decode()
+        return httpx.Response(201)
+
+    from hermes_yandex_calendar.ical import Attendee
+
+    client = make_client(handler)
+    client.create_event(Event(uid="e", summary="s", attendees=[Attendee(email="a@x.ru")]))
+
+
+MEETING_ICS = """BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:evt-1
+SUMMARY:Sync
+DTSTART:20260725T140000Z
+ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:user@yandex.ru
+ATTENDEE:mailto:other@x.ru
+END:VEVENT
+END:VCALENDAR"""
+
+
+def test_respond_to_event_sets_own_partstat():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=MEETING_ICS)
+        seen["body"] = request.content.decode()
+        return httpx.Response(204)
+
+    client = make_client(handler)
+    client.respond_to_event("/cal/evt-1.ics", "ACCEPTED")
+    body = seen["body"]
+    # our own attendee flips to ACCEPTED; the other attendee stays as-is
+    assert "ATTENDEE;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:user@yandex.ru" in body
+    assert "ATTENDEE:mailto:other@x.ru" in body
+
+
+def test_respond_when_not_attendee_raises():
+    not_me = MEETING_ICS.replace("mailto:user@yandex.ru", "mailto:someoneelse@x.ru")
+    client = make_client(lambda r: httpx.Response(200, text=not_me))
+    with pytest.raises(CalDAVError, match="not listed as an attendee"):
+        client.respond_to_event("/cal/evt-1.ics", "DECLINED")
+
+
+def test_respond_event_missing_raises():
+    client = make_client(lambda r: httpx.Response(404))
+    with pytest.raises(CalDAVError, match="Event not found"):
+        client.respond_to_event("/cal/gone.ics", "ACCEPTED")
+
+
+def test_move_event_copies_then_deletes():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, text=EVENT_ICS)
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=TWO_CALENDARS)
+        if request.method == "PUT":
+            return httpx.Response(201)
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(405)
+
+    client = make_client(handler)
+    moved = client.move_event("/calendars/user@yandex.ru/events-42/evt-1.ics", "Personal")
+    methods = [m for m, _ in calls]
+    # copy (PUT into target) must precede the DELETE of the original
+    assert methods.index("PUT") < methods.index("DELETE")
+    assert moved.href == "/calendars/user@yandex.ru/events-99/evt-1.ics"
+    assert ("DELETE", "/calendars/user@yandex.ru/events-42/evt-1.ics") in calls
+
+
+def test_move_event_same_calendar_is_noop():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, text=EVENT_ICS)
+        return httpx.Response(207, text=TWO_CALENDARS)
+
+    client = make_client(handler)
+    client.move_event(
+        "/calendars/user@yandex.ru/events-42/evt-1.ics",
+        "/calendars/user@yandex.ru/events-42/",
+    )
+    assert "PUT" not in calls and "DELETE" not in calls
+
+
+def test_lifecycle_context_manager_closes():
+    closed = {"v": False}
+
+    class Spy(httpx.Client):
+        def close(self):
+            closed["v"] = True
+            super().close()
+
+    http = Spy(transport=httpx.MockTransport(lambda r: httpx.Response(204)))
+    client = YandexCalDAVClient("u", "p", client=http)
+    # client did not own `http`, so context exit must NOT close it
+    with client:
+        pass
+    assert closed["v"] is False
+    http.close()
