@@ -210,6 +210,14 @@ The **E2E (live)** workflow is manual (`workflow_dispatch`). It reads
 `YANDEX_CALENDAR_LOGIN`, `YANDEX_CALENDAR_APP_PASSWORD`, and `YC_E2E_ATTENDEES`
 from a GitHub Environment named `yandex-calendar-e2e`.
 
+## Related Hermes plugins
+
+Part of a family of Yandex plugins for Hermes Agent:
+
+- [hermes-yandex-disk](https://github.com/akinfold/hermes-yandex-disk) — browse, read, write, and share files on Yandex Disk (REST API).
+- [hermes-yandex-mail](https://github.com/akinfold/hermes-yandex-mail) — search, read, flag, move, and delete Yandex Mail messages (IMAP).
+- [hermes-yandex-search-api](https://github.com/akinfold/hermes-yandex-search-api) — Yandex web search backend and generative, cited answers for Hermes (Yandex Search API).
+
 ## Contributing
 
 Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the layout,
