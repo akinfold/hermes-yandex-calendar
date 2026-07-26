@@ -1,6 +1,7 @@
 # Manual live e2e. Credentials come from a GitHub Environment named
 # `yandex-calendar-e2e` — define YANDEX_CALENDAR_LOGIN and
-# YANDEX_CALENDAR_APP_PASSWORD as secrets there.
+# YANDEX_CALENDAR_APP_PASSWORD as secrets there, plus YC_E2E_ATTENDEES
+# (comma-separated real mailboxes invited to the throwaway event).
 name: E2E (live)
 
 on:
@@ -33,4 +34,5 @@ jobs:
         env:
           YANDEX_CALENDAR_LOGIN: ${{ secrets.YANDEX_CALENDAR_LOGIN }}
           YANDEX_CALENDAR_APP_PASSWORD: ${{ secrets.YANDEX_CALENDAR_APP_PASSWORD }}
+          YC_E2E_ATTENDEES: ${{ secrets.YC_E2E_ATTENDEES }}
         run: python -m pytest -m e2e -v

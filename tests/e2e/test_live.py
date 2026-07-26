@@ -8,8 +8,8 @@ They create and then delete a throwaway event, so they leave no residue on a
 successful run. Skipped automatically when credentials are absent.
 
 Optional overrides: ``YC_E2E_MARKER`` (event summary prefix) and
-``YC_E2E_ATTENDEE`` (the address invited to the throwaway event — must be a real
-mailbox, see :func:`_attendee_email`).
+``YC_E2E_ATTENDEES`` (comma-separated addresses invited to the throwaway event —
+see :func:`_attendee_emails`).
 """
 
 from __future__ import annotations
@@ -35,27 +35,38 @@ requires_creds = pytest.mark.skipif(
     reason=f"set {ENV_LOGIN} and {ENV_PASSWORD} to run live e2e tests",
 )
 
-# ``ya.ru`` and ``yandex.ru`` are the same mailbox, so an alias of the test
-# account is guaranteed to be deliverable.
+ENV_ATTENDEES = "YC_E2E_ATTENDEES"
+
+# ``ya.ru`` and ``yandex.ru`` are the same mailbox, so a sub-address built on
+# either domain is delivered to the test account itself.
 _ALIAS_DOMAINS = {"ya.ru": "yandex.ru", "yandex.ru": "ya.ru"}
 
 
-def _attendee_email() -> str:
-    """A real, deliverable address to invite.
-
-    Yandex mails an invitation to every ``ATTENDEE``, so a made-up address bounces
-    back into the test account's inbox. Default to a sub-address of the account
-    (``login+e2e@...``): mail is delivered to the same mailbox, but the address is
-    not the account's own one — the server drops an attendee that equals the
-    ``ORGANIZER``. Override with ``YC_E2E_ATTENDEE``.
-    """
-    override = os.environ.get("YC_E2E_ATTENDEE")
-    if override:
-        return override
+def _default_attendees() -> list[str]:
+    """Sub-addresses of the test account, used when ``YC_E2E_ATTENDEES`` is unset."""
     login = get_provider_env(ENV_LOGIN) or ""
     local, _, domain = login.partition("@")
+    if not local or not domain:
+        return []
     domain = _ALIAS_DOMAINS.get(domain.lower(), domain)
-    return f"{local}+e2e@{domain}" if local and domain else login
+    return [f"{local}+e2e@{domain}"]
+
+
+def _attendee_emails() -> list[str]:
+    """Real, deliverable addresses to invite to the throwaway event.
+
+    Yandex mails an invitation to every ``ATTENDEE``, so made-up addresses bounce
+    back into the test account's inbox — and an address that resolves to the
+    account itself is dropped by the server as a self-invite (it equals the
+    ``ORGANIZER``; note that Yandex rewrites ``@ya.ru`` to ``@yandex.ru``).
+
+    The addresses come from ``YC_E2E_ATTENDEES`` (comma-separated), supplied in CI
+    by the ``yandex-calendar-e2e`` environment secret of the same name. Without it,
+    fall back to a sub-address of the account so a fresh checkout still runs.
+    """
+    raw = os.environ.get(ENV_ATTENDEES, "")
+    listed = [addr.strip() for addr in raw.split(",") if addr.strip()]
+    return listed or _default_attendees()
 
 
 @requires_creds
@@ -88,17 +99,21 @@ def test_create_then_delete_roundtrip():
             # edit it: add an attendee and mark it free
             fetched = client.get_event(created.href)
             assert fetched is not None
-            guest = _attendee_email()
-            fetched.attendees.append(Attendee(email=guest, name="Guest"))
+            guests = _attendee_emails()
+            assert guests, f"no invitee addresses: set {ENV_ATTENDEES}"
+            for i, guest in enumerate(guests, start=1):
+                fetched.attendees.append(Attendee(email=guest, name=f"Guest {i}"))
             fetched.transp = "TRANSPARENT"
             client.update_event(fetched, created.href)
 
             reread = client.get_event(created.href)
             assert reread is not None
-            returned = [a.email for a in reread.attendees]
+            returned = {a.email.lower() for a in reread.attendees}
             organizer = reread.organizer.email if reread.organizer else None
-            assert any(a.email == guest for a in reread.attendees), (
-                f"invited {guest}; server returned attendees={returned} organizer={organizer}"
+            missing = [g for g in guests if g.lower() not in returned]
+            assert not missing, (
+                f"invited {guests}; missing after round-trip: {missing}; "
+                f"server returned attendees={sorted(returned)} organizer={organizer}"
             )
             assert reread.transp == "TRANSPARENT"
         finally:
