@@ -70,6 +70,32 @@ def normalize_email(address: str) -> str:
     return normalized
 
 
+def _calendar_from_response(response) -> Calendar | None:
+    """Build a Calendar from one PROPFIND ``response``, or ``None`` if it isn't one.
+
+    The home collection lists itself and may list other resources; only entries
+    whose resourcetype includes ``calendar`` are ours.
+    """
+    href_el = next(iter(_findall_local(response, "href")), None)
+    href = (href_el.text or "").strip() if href_el is not None else ""
+    if not href or not any(_local(e.tag) == "calendar" for e in response.iter()):
+        return None
+    name_el = next(iter(_findall_local(response, "displayname")), None)
+    display = (name_el.text or "").strip() if name_el is not None else ""
+    return Calendar(href=urlsplit(href).path or href, display_name=display)
+
+
+def _calendar_matches(cal: Calendar, ref: str) -> bool:
+    """Does ``ref`` name this calendar — by display name, path segment, or href?"""
+    needle = ref.strip().lower()
+    segments = [p for p in cal.href.split("/") if p]
+    return (
+        cal.display_name.strip().lower() == needle
+        or (bool(segments) and segments[-1].strip().lower() == needle)
+        or cal.href.rstrip("/") == urlsplit(ref).path.rstrip("/")
+    )
+
+
 def _fmt_utc(value: datetime | date) -> str:
     if isinstance(value, datetime):
         dt = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
@@ -169,20 +195,8 @@ class YandexCalDAVClient:
             root = DET.fromstring(xml_text)
         except Exception as exc:
             raise CalDAVError(f"Could not parse discovery response: {exc}") from exc
-        calendars: list[Calendar] = []
-        for response in _findall_local(root, "response"):
-            href_el = next(iter(_findall_local(response, "href")), None)
-            if href_el is None or not (href_el.text or "").strip():
-                continue
-            href = href_el.text.strip()
-            # the home collection lists itself; skip non-calendar resources
-            is_calendar = any(_local(e.tag) == "calendar" for e in response.iter())
-            if not is_calendar:
-                continue
-            name_el = next(iter(_findall_local(response, "displayname")), None)
-            display = (name_el.text or "").strip() if name_el is not None else ""
-            calendars.append(Calendar(href=urlsplit(href).path or href, display_name=display))
-        return calendars
+        parsed = (_calendar_from_response(r) for r in _findall_local(root, "response"))
+        return [cal for cal in parsed if cal is not None]
 
     def list_calendars(self) -> list[Calendar]:
         """Calendars this client may use — all discovered, filtered by the allow-list."""
@@ -208,12 +222,9 @@ class YandexCalDAVClient:
         ``ref`` must match an allowed calendar, otherwise a ``CalDAVError`` naming
         the available calendars is raised.
         """
-        # Fast path: an explicit collection href with no allow-list to enforce —
-        # use it directly instead of a discovery round-trip.
-        if ref and ref.strip() and not self._allowed:
-            r = ref.strip()
-            if r.startswith(("/", "http://", "https://")):
-                return urlsplit(r).path or r
+        direct = self._href_without_discovery(ref)
+        if direct is not None:
+            return direct
         calendars = self.list_calendars()
         if not calendars:
             hint = (
@@ -224,18 +235,24 @@ class YandexCalDAVClient:
             raise CalDAVError(f"No calendars available{hint}.")
         if ref is None or not ref.strip():
             return calendars[0].href
-        needle = ref.strip().lower()
-        ref_path = urlsplit(ref).path.rstrip("/")
         for cal in calendars:
-            seg = [p for p in cal.href.split("/") if p]
-            if (
-                cal.display_name.strip().lower() == needle
-                or (seg and seg[-1].strip().lower() == needle)
-                or cal.href.rstrip("/") == ref_path
-            ):
+            if _calendar_matches(cal, ref):
                 return cal.href
         names = ", ".join(repr(c.display_name or c.href) for c in calendars)
         raise CalDAVError(f"Calendar {ref!r} not found. Available calendars: {names}.")
+
+    def _href_without_discovery(self, ref: str | None) -> str | None:
+        """An explicit collection href, usable as-is when no allow-list applies.
+
+        Saves a discovery round-trip; with an allow-list configured the reference
+        must still be checked against it, so this returns ``None`` then.
+        """
+        if not ref or not ref.strip() or self._allowed:
+            return None
+        candidate = ref.strip()
+        if candidate.startswith(("/", "http://", "https://")):
+            return urlsplit(candidate).path or candidate
+        return None
 
     def default_calendar_href(self) -> str:
         """The href of the calendar writes/queries target when none is given."""

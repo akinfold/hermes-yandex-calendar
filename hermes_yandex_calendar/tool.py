@@ -288,19 +288,22 @@ def handle_list_calendars(args: dict[str, Any], **_kwargs: Any) -> str:
         return _error(f"Unexpected error listing calendars: {exc}")
 
 
+def _range_from_args(args: dict[str, Any]) -> tuple[datetime | date, datetime | date]:
+    """The time range to query: defaults to the next seven days from now."""
+    start = _parse_dt(args["start"]) if args.get("start") else datetime.now(UTC)
+    if args.get("end"):
+        return start, _parse_dt(args["end"])
+    base = (
+        start
+        if isinstance(start, datetime)
+        else datetime(start.year, start.month, start.day, tzinfo=UTC)
+    )
+    return start, base + timedelta(days=7)
+
+
 def handle_list(args: dict[str, Any], **_kwargs: Any) -> str:
     try:
-        now = datetime.now(UTC)
-        start = _parse_dt(args["start"]) if args.get("start") else now
-        if args.get("end"):
-            end = _parse_dt(args["end"])
-        else:
-            base = (
-                start
-                if isinstance(start, datetime)
-                else datetime(start.year, start.month, start.day, tzinfo=UTC)
-            )
-            end = base + timedelta(days=7)
+        start, end = _range_from_args(args)
         calendar = (args.get("calendar") or "").strip() or None
         with build_client() as client:
             events = client.list_events(start, end, calendar=calendar)
@@ -314,36 +317,44 @@ def handle_list(args: dict[str, Any], **_kwargs: Any) -> str:
         return _error(f"Unexpected error listing events: {exc}")
 
 
+def _span_for_create(args: dict[str, Any]) -> tuple[datetime | date, datetime | date, bool]:
+    """Work out (start, end, all_day) from the create arguments.
+
+    A bare date with no ``end`` becomes a whole day; a datetime defaults to an
+    hour. A bare date always implies an all-day event, even unflagged.
+    """
+    all_day = bool(args.get("all_day"))
+    start = _parse_dt(args["start"])
+    is_date_only = not isinstance(start, datetime)
+    if args.get("end"):
+        return start, _parse_dt(args["end"]), all_day
+    if is_date_only:
+        return start, start + timedelta(days=1), True
+    return start, start + timedelta(hours=1), all_day
+
+
+def _event_from_create_args(args: dict[str, Any]) -> Event:
+    start, end, all_day = _span_for_create(args)
+    return Event(
+        uid="",
+        summary=(args.get("summary") or "").strip(),
+        start=start,
+        end=end,
+        location=(args.get("location") or "").strip(),
+        description=(args.get("description") or "").strip(),
+        all_day=all_day,
+        attendees=[_parse_attendee(a) for a in (args.get("attendees") or [])],
+        transp=_transp_for(args.get("busy", True)) if "busy" in args else "",
+    )
+
+
 def handle_create(args: dict[str, Any], **_kwargs: Any) -> str:
     try:
-        summary = (args.get("summary") or "").strip()
-        if not summary:
+        if not (args.get("summary") or "").strip():
             return _error("'summary' is required.")
         if not args.get("start"):
             return _error("'start' is required.")
-        all_day = bool(args.get("all_day"))
-        start = _parse_dt(args["start"])
-        if args.get("end"):
-            end: datetime | date = _parse_dt(args["end"])
-        elif all_day and isinstance(start, date) and not isinstance(start, datetime):
-            end = start + timedelta(days=1)
-        elif isinstance(start, datetime):
-            end = start + timedelta(hours=1)
-        else:  # start is a bare date but not marked all_day
-            all_day = True
-            end = start + timedelta(days=1)
-        attendees = [_parse_attendee(a) for a in (args.get("attendees") or [])]
-        event = Event(
-            uid="",
-            summary=summary,
-            start=start,
-            end=end,
-            location=(args.get("location") or "").strip(),
-            description=(args.get("description") or "").strip(),
-            all_day=all_day,
-            attendees=attendees,
-            transp=_transp_for(args.get("busy", True)) if "busy" in args else "",
-        )
+        event = _event_from_create_args(args)
         calendar = (args.get("calendar") or "").strip() or None
         with build_client() as client:
             created = client.create_event(event, calendar=calendar)
@@ -376,22 +387,26 @@ def handle_update(args: dict[str, Any], **_kwargs: Any) -> str:
         return _error(f"Unexpected error updating event: {exc}")
 
 
-def _apply_updates(event: Event, args: dict[str, Any]) -> None:
-    """Mutate ``event`` in place with the provided update fields."""
+_UPDATABLE_TEXT = ("summary", "location", "description")
+
+
+def _apply_field_updates(event: Event, args: dict[str, Any]) -> None:
+    """Apply the scalar fields present in ``args`` (an empty string clears one)."""
+    for field in _UPDATABLE_TEXT:
+        if args.get(field) is not None:
+            setattr(event, field, str(args[field]).strip())
     if "all_day" in args:
         event.all_day = bool(args["all_day"])
-    if args.get("summary") is not None:
-        event.summary = str(args["summary"]).strip()
-    if args.get("location") is not None:
-        event.location = str(args["location"]).strip()
-    if args.get("description") is not None:
-        event.description = str(args["description"]).strip()
     if args.get("start"):
         event.start = _parse_dt(args["start"])
     if args.get("end"):
         event.end = _parse_dt(args["end"])
     if "busy" in args:
         event.transp = _transp_for(args["busy"])
+
+
+def _apply_attendee_updates(event: Event, args: dict[str, Any]) -> None:
+    """Add and remove attendees incrementally, matching e-mails case-insensitively."""
     for item in args.get("add_attendees") or []:
         new = _parse_attendee(item)
         if not any(a.email.lower() == new.email.lower() for a in event.attendees):
@@ -399,6 +414,12 @@ def _apply_updates(event: Event, args: dict[str, Any]) -> None:
     remove = {str(e).strip().lower() for e in (args.get("remove_attendees") or [])}
     if remove:
         event.attendees = [a for a in event.attendees if a.email.lower() not in remove]
+
+
+def _apply_updates(event: Event, args: dict[str, Any]) -> None:
+    """Mutate ``event`` in place with the provided update fields."""
+    _apply_field_updates(event, args)
+    _apply_attendee_updates(event, args)
 
 
 _RESPONSE_PARTSTAT = {

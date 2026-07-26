@@ -165,6 +165,16 @@ def _format_cal_address(prop: str, attendee: Attendee) -> str:
 # --- datetime handling -----------------------------------------------------
 
 
+def _localize(dt: datetime, tzid: str | None) -> datetime:
+    """Attach the TZID's zone, or leave the value floating if it is unusable."""
+    if not tzid or ZoneInfo is None:
+        return dt
+    try:
+        return dt.replace(tzinfo=ZoneInfo(tzid))
+    except Exception:  # unknown zone -> keep naive rather than fail the parse
+        return dt
+
+
 def _parse_dt(value: str, params: dict[str, str]) -> tuple[datetime | date | None, bool]:
     """Parse a DTSTART/DTEND value. Returns (value, is_all_day)."""
     value = value.strip()
@@ -173,22 +183,14 @@ def _parse_dt(value: str, params: dict[str, str]) -> tuple[datetime | date | Non
             return date(int(value[0:4]), int(value[4:6]), int(value[6:8])), True
         except ValueError:
             return None, True
-    fmt = "%Y%m%dT%H%M%S"
     is_utc = value.endswith("Z")
-    core = value[:-1] if is_utc else value
     try:
-        dt = datetime.strptime(core, fmt)
+        dt = datetime.strptime(value[:-1] if is_utc else value, "%Y%m%dT%H%M%S")
     except ValueError:
         return None, False
     if is_utc:
         return dt.replace(tzinfo=UTC), False
-    tzid = params.get("TZID")
-    if tzid and ZoneInfo is not None:
-        try:
-            return dt.replace(tzinfo=ZoneInfo(tzid)), False
-        except Exception:  # unknown tz -> keep naive rather than fail
-            return dt, False
-    return dt, False
+    return _localize(dt, params.get("TZID")), False
 
 
 def _format_dt(value: datetime | date, all_day: bool) -> tuple[str, str]:
@@ -208,54 +210,57 @@ def _format_dt(value: datetime | date, all_day: bool) -> tuple[str, str]:
 _TEXT_PROPS = {"SUMMARY": "summary", "LOCATION": "location", "DESCRIPTION": "description"}
 
 
+def _apply_property(event: Event, line: str) -> None:
+    """Fold one VEVENT content line into ``event``.
+
+    Anything this model does not cover (RRULE, SEQUENCE, X- extensions, …) is kept
+    verbatim in ``raw_props`` so it survives a parse/build round-trip.
+    """
+    name, params, value = _split_prop(line)
+    if name == "UID":
+        event.uid = _unescape(value)
+    elif name in _TEXT_PROPS:
+        setattr(event, _TEXT_PROPS[name], _unescape(value))
+    elif name == "DTSTART":
+        event.start, event.all_day = _parse_dt(value, params)
+    elif name == "DTEND":
+        end, all_day = _parse_dt(value, params)
+        event.end = end
+        event.all_day = event.all_day or all_day
+    elif name == "TRANSP":
+        event.transp = value.strip().upper()
+    elif name == "ORGANIZER":
+        event.organizer = _parse_cal_address(value, params)
+    elif name == "ATTENDEE":
+        event.attendees.append(_parse_cal_address(value, params))
+    else:
+        event.raw_props.append(line)
+
+
 def parse_events(text: str) -> list[Event]:
     """Parse every VEVENT found in an iCalendar document."""
     events: list[Event] = []
     current: Event | None = None
     nested: list[str] = []  # open sub-components inside the VEVENT (VALARM, …)
     for line in _unfold(text):
-        if not line:
-            continue
         upper = line.upper()
         if current is None:
             if upper.startswith("BEGIN:VEVENT"):
                 current = Event(uid="")
-            continue
-        # A sub-component carries its own SUMMARY/DESCRIPTION/TRIGGER; those must
-        # not be read as the event's own. Keep the whole block verbatim instead.
-        if nested:
+        elif nested:
+            # A sub-component has its own SUMMARY/DESCRIPTION/TRIGGER, which must
+            # not be read as the event's. Keep the block verbatim instead.
             current.raw_props.append(line)
             if upper.startswith("END:") and upper[4:].strip() == nested[-1]:
                 nested.pop()
-            continue
-        if upper.startswith("BEGIN:"):
+        elif upper.startswith("BEGIN:"):
             nested.append(upper[len("BEGIN:") :].strip())
             current.raw_props.append(line)
-            continue
-        if upper.startswith("END:VEVENT"):
+        elif upper.startswith("END:VEVENT"):
             events.append(current)
             current = None
-            continue
-        name, params, value = _split_prop(line)
-        if name == "UID":
-            current.uid = _unescape(value)
-        elif name in _TEXT_PROPS:
-            setattr(current, _TEXT_PROPS[name], _unescape(value))
-        elif name == "DTSTART":
-            current.start, current.all_day = _parse_dt(value, params)
-        elif name == "DTEND":
-            end, all_day = _parse_dt(value, params)
-            current.end = end
-            current.all_day = current.all_day or all_day
-        elif name == "TRANSP":
-            current.transp = value.strip().upper()
-        elif name == "ORGANIZER":
-            current.organizer = _parse_cal_address(value, params)
-        elif name == "ATTENDEE":
-            current.attendees.append(_parse_cal_address(value, params))
-        else:
-            # Preserve anything we don't model (RRULE, VALARM lines, SEQUENCE, …).
-            current.raw_props.append(line)
+        elif line:
+            _apply_property(current, line)
     return events
 
 
@@ -276,29 +281,34 @@ def build_calendar(
         f"PRODID:{prodid}",
         "BEGIN:VEVENT",
         f"UID:{_escape(event.uid)}",
+        *_event_lines(event, dtstamp),
+        "END:VEVENT",
+        "END:VCALENDAR",
     ]
+    return "\r\n".join(_fold(line) for line in lines) + "\r\n"
+
+
+def _event_lines(event: Event, dtstamp: datetime | None) -> list[str]:
+    """The VEVENT body: modelled properties first, then everything kept verbatim."""
+    lines: list[str] = []
     has_dtstamp = any(p.upper().startswith("DTSTAMP") for p in event.raw_props)
     if dtstamp is not None and not has_dtstamp:
         lines.append(f"DTSTAMP:{dtstamp.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}")
-    if event.summary:
-        lines.append(f"SUMMARY:{_escape(event.summary)}")
-    if event.start is not None:
-        suffix, val = _format_dt(event.start, event.all_day)
-        lines.append(f"DTSTART{suffix}:{val}")
-    if event.end is not None:
-        suffix, val = _format_dt(event.end, event.all_day)
-        lines.append(f"DTEND{suffix}:{val}")
-    if event.transp:
-        lines.append(f"TRANSP:{event.transp}")
-    if event.location:
-        lines.append(f"LOCATION:{_escape(event.location)}")
-    if event.description:
-        lines.append(f"DESCRIPTION:{_escape(event.description)}")
+    for prop, value in (
+        ("SUMMARY", event.summary),
+        ("TRANSP", event.transp),
+        ("LOCATION", event.location),
+        ("DESCRIPTION", event.description),
+    ):
+        if value:
+            # TRANSP carries an enum token, so escaping is a no-op for it.
+            lines.append(f"{prop}:{_escape(value)}")
+    for prop, moment in (("DTSTART", event.start), ("DTEND", event.end)):
+        if moment is not None:
+            suffix, val = _format_dt(moment, event.all_day)
+            lines.append(f"{prop}{suffix}:{val}")
     if event.organizer is not None:
         lines.append(_format_cal_address("ORGANIZER", event.organizer))
-    for attendee in event.attendees:
-        lines.append(_format_cal_address("ATTENDEE", attendee))
+    lines.extend(_format_cal_address("ATTENDEE", a) for a in event.attendees)
     lines.extend(event.raw_props)
-    lines.append("END:VEVENT")
-    lines.append("END:VCALENDAR")
-    return "\r\n".join(_fold(line) for line in lines) + "\r\n"
+    return lines
