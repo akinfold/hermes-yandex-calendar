@@ -44,17 +44,18 @@ def _attendee_email() -> str:
     """A real, deliverable address to invite.
 
     Yandex mails an invitation to every ``ATTENDEE``, so a made-up address bounces
-    back into the test account's inbox. Default to an alias of the account itself:
-    it is delivered, yet it differs from the ``ORGANIZER`` the plugin fills in, so
-    the attendee round-trip stays meaningful. Override with ``YC_E2E_ATTENDEE``.
+    back into the test account's inbox. Default to a sub-address of the account
+    (``login+e2e@...``): mail is delivered to the same mailbox, but the address is
+    not the account's own one — the server drops an attendee that equals the
+    ``ORGANIZER``. Override with ``YC_E2E_ATTENDEE``.
     """
     override = os.environ.get("YC_E2E_ATTENDEE")
     if override:
         return override
     login = get_provider_env(ENV_LOGIN) or ""
     local, _, domain = login.partition("@")
-    alias = _ALIAS_DOMAINS.get(domain.lower())
-    return f"{local}@{alias}" if alias else login
+    domain = _ALIAS_DOMAINS.get(domain.lower(), domain)
+    return f"{local}+e2e@{domain}" if local and domain else login
 
 
 @requires_creds
