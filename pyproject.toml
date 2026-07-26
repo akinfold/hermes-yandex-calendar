@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hermes-yandex-calendar"
-version = "0.1.0"
-description = "Yandex Calendar plugin for Hermes Agent (list/create/delete events over CalDAV)."
+version = "0.2.0"
+description = "Yandex Calendar plugin for Hermes Agent: list, create, update, RSVP, move, and delete events over CalDAV."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
