@@ -69,6 +69,16 @@ def _attendee_emails() -> list[str]:
     return listed or _default_attendees()
 
 
+def _canonical(email: str) -> str:
+    """Fold an address the way the server does, so ``ya.ru`` and ``yandex.ru`` match.
+
+    Yandex stores attendees under the canonical domain: invite ``me@ya.ru`` and the
+    event comes back with ``me@yandex.ru``. Same mailbox, so compare them as equal.
+    """
+    local, _, domain = email.strip().lower().partition("@")
+    return f"{local}@{'yandex.ru' if domain == 'ya.ru' else domain}"
+
+
 @requires_creds
 def test_discover_and_list():
     with build_client() as client:
@@ -108,9 +118,9 @@ def test_create_then_delete_roundtrip():
 
             reread = client.get_event(created.href)
             assert reread is not None
-            returned = {a.email.lower() for a in reread.attendees}
+            returned = {_canonical(a.email) for a in reread.attendees}
             organizer = reread.organizer.email if reread.organizer else None
-            missing = [g for g in guests if g.lower() not in returned]
+            missing = [g for g in guests if _canonical(g) not in returned]
             assert not missing, (
                 f"invited {guests}; missing after round-trip: {missing}; "
                 f"server returned attendees={sorted(returned)} organizer={organizer}"
