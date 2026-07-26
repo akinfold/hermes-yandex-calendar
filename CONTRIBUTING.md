@@ -1,12 +1,32 @@
 # Contributing
 
-Thanks for your interest in improving **hermes-yandex-calendar**.
+Thanks for your interest in improving **hermes-yandex-calendar** — a
+[Hermes Agent](https://hermes-agent.nousresearch.com) plugin that manages
+Yandex Calendar over CalDAV. Contributions of all sizes are welcome: bug
+reports, docs, tests, and features.
+
+All repository content — code, comments, docs, commit messages, issues, and
+PRs — is in **English**. Be respectful and constructive; assume good intent.
 
 ## Development setup
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
+```
+
+## Project layout
+
+```
+hermes_yandex_calendar/
+  ical.py       # iCalendar (RFC 5545) parsing/serialization, no Hermes imports
+  caldav.py     # CalDAV client for Yandex, no Hermes imports
+  config.py     # env -> client, calendar allow-list, action allow-list
+  _compat.py    # real-vs-shim host env helper
+  tool.py       # tool schemas + handlers (JSON in, JSON string out)
+  __init__.py   # register(ctx) — the plugin entry point
+tests/          # unit tests (no network, httpx.MockTransport)
+tests/e2e/      # live tests against a real account, marked `e2e`
 ```
 
 ## Ground rules
@@ -33,7 +53,20 @@ pytest --cov=hermes_yandex_calendar --cov-fail-under=90
 
 Unit tests must not hit the network — mock HTTP with `httpx.MockTransport`. Live
 tests go under `tests/e2e/`, are marked `@pytest.mark.e2e`, and skip when credentials
-are absent.
+are absent. To run them locally, put the credentials in files the e2e conftest picks
+up (see `tests/e2e/conftest.py`) and run `pytest -m e2e`. Live tests are manual and
+never required for a PR.
+
+## Commit & PR conventions
+
+- Focused commits with imperative subject lines (e.g. `caldav: keep VALARM blocks`).
+- Open a PR against `main`, fill in the template, and link any related issue.
+- CI (lint + tests on Python 3.11–3.13, coverage ≥ 90%) must pass.
+
+## Reporting security issues
+
+Please do not open a public issue for anything security-sensitive. Contact the
+maintainer directly through the repository owner's GitHub profile.
 
 ## Releasing
 

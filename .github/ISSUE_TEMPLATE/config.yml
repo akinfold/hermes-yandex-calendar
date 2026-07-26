@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Hermes Agent documentation
+    url: https://hermes-agent.nousresearch.com/docs/
+    about: How Hermes Agent, plugins, and toolsets work.
+  - name: Yandex Calendar CalDAV documentation
+    url: https://yandex.ru/support/calendar/common/technical-details.html
+    about: The CalDAV server, supported clients, and connection details.
+  - name: Yandex app passwords
+    url: https://id.yandex.ru/security/app-passwords
+    about: Create the app password CalDAV requires (an account password will not work).

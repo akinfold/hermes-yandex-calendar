@@ -30,6 +30,7 @@ dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.6"]
 [project.urls]
 Homepage = "https://github.com/akinfold/hermes-yandex-calendar"
 Repository = "https://github.com/akinfold/hermes-yandex-calendar"
+Issues = "https://github.com/akinfold/hermes-yandex-calendar/issues"
 
 # Value is the MODULE (Hermes does getattr(module, "register")), not module:register.
 [project.entry-points."hermes_agent.plugins"]
@@ -42,6 +43,14 @@ packages = ["hermes_yandex_calendar"]
 "hermes_yandex_calendar/plugin.yaml" = "hermes_yandex_calendar/plugin.yaml"
 "hermes_yandex_calendar/py.typed" = "hermes_yandex_calendar/py.typed"
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "hermes_yandex_calendar",
+    "tests",
+    "README.md",
+    "LICENSE",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["e2e: live tests that hit the real Yandex CalDAV API (deselected by default)."]
@@ -50,9 +59,14 @@ addopts = "-m 'not e2e'"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# The project root, so `hermes_yandex_calendar` resolves as first-party.
+src = ["."]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
 
 [tool.ruff.format]
 quote-style = "double"

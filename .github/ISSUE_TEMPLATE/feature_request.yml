@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task you want the agent to handle, and what stops it today.
+      placeholder: I want the agent to find a free slot shared by several calendars, but ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: A new tool, a new argument, a config option — whatever you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: caldav
+    attributes:
+      label: Feasibility
+      description: Yandex Calendar has no public REST API; everything goes over CalDAV.
+      options:
+        - label: I have checked that CalDAV can express this (or I am not sure — please advise)
