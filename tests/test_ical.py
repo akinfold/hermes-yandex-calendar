@@ -189,3 +189,45 @@ def test_dtstamp_added_when_requested_and_not_duplicated():
     out = build_calendar(ev, dtstamp=datetime(2026, 7, 25, 12, tzinfo=UTC))
     assert out.count("DTSTAMP") == 1
     assert "DTSTAMP:20200101T000000Z" in out
+
+
+VALARM_ICS = """BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:evt-alarm
+SUMMARY:Standup
+DESCRIPTION:Daily sync notes
+DTSTART:20260725T090000Z
+RRULE:FREQ=WEEKLY;BYDAY=MO
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Reminder popup
+TRIGGER:-PT10M
+END:VALARM
+END:VEVENT
+END:VCALENDAR"""
+
+
+def test_valarm_properties_do_not_leak_into_the_event():
+    """A VALARM carries its own DESCRIPTION; it must not become the event's."""
+    event = parse_events(VALARM_ICS)[0]
+    assert event.summary == "Standup"
+    assert event.description == "Daily sync notes"
+
+
+def test_valarm_block_is_preserved_verbatim():
+    event = parse_events(VALARM_ICS)[0]
+    rebuilt = build_calendar(event)
+    assert "BEGIN:VALARM" in rebuilt
+    assert "DESCRIPTION:Reminder popup" in rebuilt
+    assert "TRIGGER:-PT10M" in rebuilt
+    assert "END:VALARM" in rebuilt
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO" in rebuilt
+    # the event's own DESCRIPTION is still emitted exactly once
+    assert rebuilt.count("DESCRIPTION:Daily sync notes") == 1
+
+
+def test_nested_component_round_trips_through_reparse():
+    event = parse_events(VALARM_ICS)[0]
+    reparsed = parse_events(build_calendar(event))[0]
+    assert reparsed.description == "Daily sync notes"
+    assert any("VALARM" in line for line in reparsed.raw_props)

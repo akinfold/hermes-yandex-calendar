@@ -212,21 +212,29 @@ def parse_events(text: str) -> list[Event]:
     """Parse every VEVENT found in an iCalendar document."""
     events: list[Event] = []
     current: Event | None = None
-    in_event = False
+    nested: list[str] = []  # open sub-components inside the VEVENT (VALARM, …)
     for line in _unfold(text):
         if not line:
             continue
         upper = line.upper()
-        if upper.startswith("BEGIN:VEVENT"):
-            current = Event(uid="")
-            in_event = True
+        if current is None:
+            if upper.startswith("BEGIN:VEVENT"):
+                current = Event(uid="")
+            continue
+        # A sub-component carries its own SUMMARY/DESCRIPTION/TRIGGER; those must
+        # not be read as the event's own. Keep the whole block verbatim instead.
+        if nested:
+            current.raw_props.append(line)
+            if upper.startswith("END:") and upper[4:].strip() == nested[-1]:
+                nested.pop()
+            continue
+        if upper.startswith("BEGIN:"):
+            nested.append(upper[len("BEGIN:") :].strip())
+            current.raw_props.append(line)
             continue
         if upper.startswith("END:VEVENT"):
-            if current is not None:
-                events.append(current)
-            current, in_event = None, False
-            continue
-        if not in_event or current is None:
+            events.append(current)
+            current = None
             continue
         name, params, value = _split_prop(line)
         if name == "UID":

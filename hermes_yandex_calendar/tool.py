@@ -27,10 +27,10 @@ _CALENDAR_HINT = (
     "Target calendar: its name (as shown by yandex_calendar_list_calendars) or href. "
     "Omit to use the default (first) calendar."
 )
-_ATTENDEE_HINT = (
-    "Attendees as a list of emails ('a@x.ru'), 'Name <a@x.ru>' strings, or objects "
-    "{'email','name','role','partstat'}."
-)
+# Plain strings only: a union item type ("string" or "object") is rejected by
+# strict function-calling validators. Handlers still accept objects if a model
+# sends them anyway.
+_ATTENDEE_HINT = "Each entry is an email ('a@x.ru') or a 'Name <a@x.ru>' string."
 
 LIST_CALENDARS_SCHEMA: dict[str, Any] = {
     "name": "yandex_calendar_list_calendars",
@@ -83,7 +83,7 @@ CREATE_SCHEMA: dict[str, Any] = {
             "calendar": {"type": "string", "description": _CALENDAR_HINT},
             "attendees": {
                 "type": "array",
-                "items": {"type": ["string", "object"]},
+                "items": {"type": "string"},
                 "description": f"Optional attendees to invite. {_ATTENDEE_HINT}",
             },
             "busy": {
@@ -119,7 +119,7 @@ UPDATE_SCHEMA: dict[str, Any] = {
             },
             "add_attendees": {
                 "type": "array",
-                "items": {"type": ["string", "object"]},
+                "items": {"type": "string"},
                 "description": f"Attendees to add. {_ATTENDEE_HINT}",
             },
             "remove_attendees": {

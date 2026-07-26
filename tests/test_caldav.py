@@ -487,3 +487,73 @@ def test_lifecycle_context_manager_closes():
         pass
     assert closed["v"] is False
     http.close()
+
+
+RECURRING_WITH_OVERRIDE = """BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:evt-rec
+SUMMARY:Weekly
+DTSTART:20260725T090000Z
+RRULE:FREQ=WEEKLY
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-rec
+RECURRENCE-ID:20260801T090000Z
+SUMMARY:Weekly (moved)
+DTSTART:20260801T100000Z
+END:VEVENT
+END:VCALENDAR"""
+
+
+def test_get_event_refuses_resources_with_recurrence_overrides():
+    """Editing would keep only the first VEVENT, silently dropping the exceptions."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=RECURRING_WITH_OVERRIDE)
+
+    with pytest.raises(CalDAVError, match="2 components"):
+        make_client(handler).get_event("/cal/evt-rec.ics")
+
+
+def test_move_event_copies_the_resource_verbatim():
+    """Everything survives a move, including occurrences the model cannot represent."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=RECURRING_WITH_OVERRIDE)
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=TWO_CALENDARS)
+        if request.method == "PUT":
+            seen["path"] = request.url.path
+            seen["body"] = request.content.decode()
+            seen["if_none_match"] = request.headers.get("If-None-Match")
+            return httpx.Response(201)
+        seen["deleted"] = request.url.path
+        return httpx.Response(204)
+
+    client = make_client(handler)
+    moved = client.move_event("/calendars/user@yandex.ru/events-99/evt-rec.ics", "events-42")
+
+    assert seen["body"] == RECURRING_WITH_OVERRIDE
+    assert seen["if_none_match"] == "*"
+    assert seen["path"] == "/calendars/user@yandex.ru/events-42/evt-rec.ics"
+    assert seen["deleted"] == "/calendars/user@yandex.ru/events-99/evt-rec.ics"
+    assert moved.href == "/calendars/user@yandex.ru/events-42/evt-rec.ics"
+
+
+def test_move_event_keeps_the_original_when_the_copy_fails():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, text=RECURRING_WITH_OVERRIDE)
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=TWO_CALENDARS)
+        return httpx.Response(412)  # PUT rejected: something is already there
+
+    client = make_client(handler)
+    with pytest.raises(CalDAVError, match="Moving event failed"):
+        client.move_event("/calendars/user@yandex.ru/events-99/evt-rec.ics", "events-42")
+    assert "DELETE" not in calls

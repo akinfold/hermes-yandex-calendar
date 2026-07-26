@@ -104,6 +104,9 @@ class YandexCalDAVClient:
             auth=httpx.BasicAuth(login, password),
             headers={"User-Agent": "hermes-yandex-calendar"},
             timeout=timeout,
+            # CalDAV home sets are commonly served behind a redirect; httpx does
+            # not follow them by default, which would surface as a bare 301.
+            follow_redirects=True,
         )
         self._calendars: list[Calendar] | None = None
 
@@ -289,8 +292,8 @@ class YandexCalDAVClient:
                 events.append(event)
         return events
 
-    def get_event(self, event_href: str) -> Event | None:
-        """GET a single event resource and parse it. Returns ``None`` if it is gone."""
+    def _fetch_document(self, event_href: str) -> tuple[str, list[Event]] | None:
+        """GET an event resource, returning its raw text and every VEVENT in it."""
         if not event_href:
             raise CalDAVError("event_href is required.")
         resp = self._request("GET", event_href)
@@ -298,9 +301,28 @@ class YandexCalDAVClient:
             return None
         if resp.status_code >= 400:
             raise CalDAVError(f"Fetching event failed: HTTP {resp.status_code}")
-        events = parse_events(resp.text)
+        return resp.text, parse_events(resp.text)
+
+    def get_event(self, event_href: str) -> Event | None:
+        """GET a single event resource and parse it. Returns ``None`` if it is gone.
+
+        Refuses resources holding several VEVENTs (a recurring event plus its
+        per-occurrence overrides): this model keeps one VEVENT, so writing it back
+        would silently drop the others. :meth:`move_event` copies such resources
+        verbatim instead.
+        """
+        document = self._fetch_document(event_href)
+        if document is None:
+            return None
+        _text, events = document
         if not events:
             return None
+        if len(events) > 1:
+            raise CalDAVError(
+                f"This resource holds {len(events)} components (a recurring event and its "
+                "modified occurrences); editing it here would drop them. Change it in the "
+                "Yandex Calendar UI, or move/delete the event as a whole."
+            )
         event = events[0]
         event.href = urlsplit(event_href).path or event_href
         return event
@@ -370,20 +392,37 @@ class YandexCalDAVClient:
     def move_event(self, event_href: str, target_calendar: str) -> Event:
         """Move an event to another calendar (copy into the target, then delete original).
 
-        Portable across CalDAV servers and preserves everything the event carries
-        (recurrence, alarms, attendees), since the resource is round-tripped whole.
+        The resource is copied **byte for byte** rather than re-serialized from the
+        parsed model, so everything survives: recurrence rules and their modified
+        occurrences, alarms, and any property this parser does not model. Portable
+        across CalDAV servers, unlike WebDAV MOVE.
         """
-        event = self.get_event(event_href)
-        if event is None:
+        document = self._fetch_document(event_href)
+        if document is None:
             raise CalDAVError(f"Event not found: {event_href}")
+        text, events = document
+        if not events:
+            raise CalDAVError(f"Resource holds no event: {event_href}")
+        event = events[0]
+        if not event.uid:
+            raise CalDAVError("Cannot move an event without a UID.")
         target = self.resolve_calendar_href(target_calendar).rstrip("/") + "/"
         source_collection = event_href.rsplit("/", 1)[0] + "/"
         if urlsplit(source_collection).path == urlsplit(target).path:
             event.href = urlsplit(event_href).path or event_href
             return event  # already in the target calendar; nothing to do
-        moved = self.create_event(event, calendar=target)  # PUT into target first
+        href = f"{target}{quote(event.uid)}.ics"
+        resp = self._request(
+            "PUT",
+            href,
+            content=text,
+            headers={"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"},
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise CalDAVError(f"Moving event failed: HTTP {resp.status_code}")
         self.delete_event(event_href)  # only remove the original once the copy exists
-        return moved
+        event.href = href
+        return event
 
     def delete_event(self, event_href: str) -> None:
         """DELETE an event resource by its href (as returned by ``list_events``)."""
