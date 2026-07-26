@@ -6,6 +6,10 @@ Deselected by default (``addopts = -m 'not e2e'``). Run explicitly with::
 
 They create and then delete a throwaway event, so they leave no residue on a
 successful run. Skipped automatically when credentials are absent.
+
+Optional overrides: ``YC_E2E_MARKER`` (event summary prefix) and
+``YC_E2E_ATTENDEE`` (the address invited to the throwaway event — must be a real
+mailbox, see :func:`_attendee_email`).
 """
 
 from __future__ import annotations
@@ -30,6 +34,27 @@ requires_creds = pytest.mark.skipif(
     not _creds_available(),
     reason=f"set {ENV_LOGIN} and {ENV_PASSWORD} to run live e2e tests",
 )
+
+# ``ya.ru`` and ``yandex.ru`` are the same mailbox, so an alias of the test
+# account is guaranteed to be deliverable.
+_ALIAS_DOMAINS = {"ya.ru": "yandex.ru", "yandex.ru": "ya.ru"}
+
+
+def _attendee_email() -> str:
+    """A real, deliverable address to invite.
+
+    Yandex mails an invitation to every ``ATTENDEE``, so a made-up address bounces
+    back into the test account's inbox. Default to an alias of the account itself:
+    it is delivered, yet it differs from the ``ORGANIZER`` the plugin fills in, so
+    the attendee round-trip stays meaningful. Override with ``YC_E2E_ATTENDEE``.
+    """
+    override = os.environ.get("YC_E2E_ATTENDEE")
+    if override:
+        return override
+    login = get_provider_env(ENV_LOGIN) or ""
+    local, _, domain = login.partition("@")
+    alias = _ALIAS_DOMAINS.get(domain.lower())
+    return f"{local}@{alias}" if alias else login
 
 
 @requires_creds
@@ -62,13 +87,14 @@ def test_create_then_delete_roundtrip():
             # edit it: add an attendee and mark it free
             fetched = client.get_event(created.href)
             assert fetched is not None
-            fetched.attendees.append(Attendee(email="guest@example.com", name="Guest"))
+            guest = _attendee_email()
+            fetched.attendees.append(Attendee(email=guest, name="Guest"))
             fetched.transp = "TRANSPARENT"
             client.update_event(fetched, created.href)
 
             reread = client.get_event(created.href)
             assert reread is not None
-            assert any(a.email == "guest@example.com" for a in reread.attendees)
+            assert any(a.email == guest for a in reread.attendees)
             assert reread.transp == "TRANSPARENT"
         finally:
             client.delete_event(created.href)
