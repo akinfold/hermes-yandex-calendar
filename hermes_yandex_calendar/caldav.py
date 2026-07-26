@@ -19,7 +19,7 @@ from defusedxml import ElementTree as DET
 
 from .ical import Attendee, Event, build_calendar, parse_events
 
-__all__ = ["CalDAVError", "Calendar", "YandexCalDAVClient"]
+__all__ = ["CalDAVError", "Calendar", "YandexCalDAVClient", "normalize_email"]
 
 DEFAULT_BASE_URL = "https://caldav.yandex.ru"
 
@@ -57,8 +57,12 @@ _YANDEX_DOMAIN_ALIASES = frozenset(
 )
 
 
-def _normalize_email(address: str) -> str:
-    """Lowercase an address and fold Yandex's interchangeable mail domains together."""
+def normalize_email(address: str) -> str:
+    """Lowercase an address and fold Yandex's interchangeable mail domains together.
+
+    Public because the live e2e suite compares invitees against what the server
+    stored, and must fold domains exactly the way this client does.
+    """
     normalized = address.strip().lower()
     local, sep, domain = normalized.rpartition("@")
     if sep and domain in _YANDEX_DOMAIN_ALIASES:
@@ -353,8 +357,8 @@ class YandexCalDAVClient:
         event = self.get_event(event_href)
         if event is None:
             raise CalDAVError(f"Event not found: {event_href}")
-        me = _normalize_email(self.login)
-        mine = next((a for a in event.attendees if _normalize_email(a.email) == me), None)
+        me = normalize_email(self.login)
+        mine = next((a for a in event.attendees if normalize_email(a.email) == me), None)
         if mine is None:
             raise CalDAVError(
                 f"{self.login} is not listed as an attendee of this event; cannot respond."

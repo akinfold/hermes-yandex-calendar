@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from hermes_yandex_calendar._compat import get_provider_env
+from hermes_yandex_calendar.caldav import normalize_email
 from hermes_yandex_calendar.config import ENV_LOGIN, ENV_PASSWORD, build_client
 from hermes_yandex_calendar.ical import Attendee, Event
 
@@ -37,19 +38,16 @@ requires_creds = pytest.mark.skipif(
 
 ENV_ATTENDEES = "YC_E2E_ATTENDEES"
 
-# ``ya.ru`` and ``yandex.ru`` are the same mailbox, so a sub-address built on
-# either domain is delivered to the test account itself.
-_ALIAS_DOMAINS = {"ya.ru": "yandex.ru", "yandex.ru": "ya.ru"}
-
 
 def _default_attendees() -> list[str]:
-    """Sub-addresses of the test account, used when ``YC_E2E_ATTENDEES`` is unset."""
-    login = get_provider_env(ENV_LOGIN) or ""
-    local, _, domain = login.partition("@")
-    if not local or not domain:
-        return []
-    domain = _ALIAS_DOMAINS.get(domain.lower(), domain)
-    return [f"{local}+e2e@{domain}"]
+    """A sub-address of the test account, used when ``YC_E2E_ATTENDEES`` is unset.
+
+    Delivered to the account's own mailbox, but the ``+e2e`` local part keeps it a
+    distinct attendee — the server drops one that resolves to the ORGANIZER.
+    """
+    login = normalize_email(get_provider_env(ENV_LOGIN) or "")
+    local, sep, domain = login.rpartition("@")
+    return [f"{local}+e2e@{domain}"] if sep else []
 
 
 def _attendee_emails() -> list[str]:
@@ -67,16 +65,6 @@ def _attendee_emails() -> list[str]:
     raw = os.environ.get(ENV_ATTENDEES, "")
     listed = [addr.strip() for addr in raw.split(",") if addr.strip()]
     return listed or _default_attendees()
-
-
-def _canonical(email: str) -> str:
-    """Fold an address the way the server does, so ``ya.ru`` and ``yandex.ru`` match.
-
-    Yandex stores attendees under the canonical domain: invite ``me@ya.ru`` and the
-    event comes back with ``me@yandex.ru``. Same mailbox, so compare them as equal.
-    """
-    local, _, domain = email.strip().lower().partition("@")
-    return f"{local}@{'yandex.ru' if domain == 'ya.ru' else domain}"
 
 
 @requires_creds
@@ -118,9 +106,9 @@ def test_create_then_delete_roundtrip():
 
             reread = client.get_event(created.href)
             assert reread is not None
-            returned = {_canonical(a.email) for a in reread.attendees}
+            returned = {normalize_email(a.email) for a in reread.attendees}
             organizer = reread.organizer.email if reread.organizer else None
-            missing = [g for g in guests if _canonical(g) not in returned]
+            missing = [g for g in guests if normalize_email(g) not in returned]
             assert not missing, (
                 f"invited {guests}; missing after round-trip: {missing}; "
                 f"server returned attendees={sorted(returned)} organizer={organizer}"
