@@ -10,7 +10,8 @@ Tested against Hermes **0.19.x**, Python **3.11–3.13**.
 
 ## What it does
 
-Registers seven standalone tools:
+Registers up to seven standalone tools — you decide which ones the agent gets, see
+[Restricting what the agent can do](#restricting-what-the-agent-can-do):
 
 | Tool | Purpose |
 |---|---|
@@ -66,6 +67,10 @@ You can restrict which calendars the plugin touches with `YANDEX_CALENDAR_CALEND
 That's it — ask the agent things like *"what's on my calendar next week?"* or
 *"add a 30-minute call tomorrow at 3pm"*.
 
+Not comfortable handing over write access yet? Add `YANDEX_CALENDAR_ACTIONS=read`
+and the agent can only look — see
+[Restricting what the agent can do](#restricting-what-the-agent-can-do).
+
 ## Configuration
 
 | Env var | Required | Default | Meaning |
@@ -104,9 +109,13 @@ YANDEX_CALENDAR_ACTIONS=read,write
 YANDEX_CALENDAR_ACTIONS=list_events,respond_event
 ```
 
+Full tool names work too, so you can paste them straight from the table above
+(`yandex_calendar_delete_event`).
+
 Leave it unset for all seven tools. A name that matches nothing is ignored, so a
-typo can only ever withhold a tool, never grant one. The list is applied when the
-plugin loads — restart Hermes after changing it.
+typo can only ever withhold a tool, never grant one — and a value that names
+nothing recognisable therefore registers nothing at all. The list is applied when
+the plugin loads — restart Hermes after changing it.
 
 Credentials are read from the environment first, then from `~/.hermes/.env`, so they
 work in gateway and subprocess runs. Secret values are never logged.
