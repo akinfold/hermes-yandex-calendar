@@ -79,6 +79,47 @@ def test_build_client_passes_allow_list(monkeypatch):
         client.close()
 
 
+def _with_actions(monkeypatch, raw: str) -> None:
+    monkeypatch.setattr(
+        config,
+        "get_provider_env",
+        lambda name: raw if name == config.ENV_ACTIONS else "",
+    )
+
+
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_allowed_actions_defaults_to_everything(monkeypatch, raw):
+    _with_actions(monkeypatch, raw)
+    assert config.allowed_actions() == frozenset(config.ACTIONS)
+
+
+def test_allowed_actions_separators_only_allow_nothing(monkeypatch):
+    # A set-but-meaningless value is still an explicit allow-list: grant nothing.
+    _with_actions(monkeypatch, ",, ,")
+    assert config.allowed_actions() == frozenset()
+
+
+def test_allowed_actions_single_actions(monkeypatch):
+    _with_actions(monkeypatch, " list_events , create_event ")
+    assert config.allowed_actions() == {"list_events", "create_event"}
+
+
+def test_allowed_actions_groups(monkeypatch):
+    _with_actions(monkeypatch, "read,delete")
+    assert config.allowed_actions() == {"list_calendars", "list_events", "delete_event"}
+
+
+def test_allowed_actions_accepts_tool_names_and_dashes(monkeypatch):
+    _with_actions(monkeypatch, "yandex_calendar_delete_event,LIST-EVENTS")
+    assert config.allowed_actions() == {"delete_event", "list_events"}
+
+
+def test_allowed_actions_drops_unknown_names(monkeypatch):
+    # A typo must never widen access — it can only withhold a tool.
+    _with_actions(monkeypatch, "list_events,delet_event,../../etc/passwd")
+    assert config.allowed_actions() == {"list_events"}
+
+
 def test_get_provider_env_reads_hermes_env_file(monkeypatch, tmp_path):
     monkeypatch.delenv("YC_FROM_FILE", raising=False)
     hermes_dir = tmp_path / ".hermes"

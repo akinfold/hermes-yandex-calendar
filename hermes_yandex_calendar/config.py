@@ -13,12 +13,38 @@ ENV_LOGIN = "YANDEX_CALENDAR_LOGIN"
 ENV_PASSWORD = "YANDEX_CALENDAR_APP_PASSWORD"
 ENV_BASE_URL = "YANDEX_CALENDAR_BASE_URL"
 ENV_CALENDARS = "YANDEX_CALENDAR_CALENDARS"
+ENV_ACTIONS = "YANDEX_CALENDAR_ACTIONS"
+
+#: Every action the plugin can expose, in the order the tools are registered.
+ACTIONS: tuple[str, ...] = (
+    "list_calendars",
+    "list_events",
+    "create_event",
+    "update_event",
+    "respond_event",
+    "move_event",
+    "delete_event",
+)
+
+#: Shorthands accepted by ``YANDEX_CALENDAR_ACTIONS`` alongside single actions.
+ACTION_GROUPS: dict[str, frozenset[str]] = {
+    "all": frozenset(ACTIONS),
+    "read": frozenset({"list_calendars", "list_events"}),
+    "write": frozenset({"create_event", "update_event", "respond_event", "move_event"}),
+    "delete": frozenset({"delete_event"}),
+}
+
+_TOOL_PREFIX = "yandex_calendar_"
 
 __all__ = [
+    "ACTIONS",
+    "ACTION_GROUPS",
+    "ENV_ACTIONS",
     "ENV_BASE_URL",
     "ENV_CALENDARS",
     "ENV_LOGIN",
     "ENV_PASSWORD",
+    "allowed_actions",
     "allowed_calendars",
     "build_client",
     "credentials_present",
@@ -29,6 +55,31 @@ def allowed_calendars() -> list[str]:
     """The comma-separated allow-list of calendar names, or ``[]`` for all."""
     raw = get_provider_env(ENV_CALENDARS)
     return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def allowed_actions() -> frozenset[str]:
+    """The actions this deployment may perform, from ``YANDEX_CALENDAR_ACTIONS``.
+
+    Accepts single actions (``create_event``), the group shorthands in
+    :data:`ACTION_GROUPS` (``read``, ``write``, ``delete``, ``all``), and full tool
+    names (``yandex_calendar_create_event``), comma-separated and case-insensitive.
+    Unset or blank means every action, so existing installs are unaffected. Any
+    other value is an explicit allow-list: names that match nothing are dropped
+    rather than raising, so a typo can only ever withhold a tool, never grant one
+    (a value naming nothing valid therefore allows nothing). Tools are filtered at
+    registration time, so Hermes must be restarted for a change to take effect.
+    """
+    raw = get_provider_env(ENV_ACTIONS)
+    if not raw.strip():
+        return frozenset(ACTIONS)
+    allowed: set[str] = set()
+    for item in raw.split(","):
+        key = item.strip().lower().replace("-", "_").removeprefix(_TOOL_PREFIX)
+        if key in ACTION_GROUPS:
+            allowed |= ACTION_GROUPS[key]
+        elif key in ACTIONS:
+            allowed.add(key)
+    return frozenset(allowed)
 
 
 class MissingCredentials(RuntimeError):

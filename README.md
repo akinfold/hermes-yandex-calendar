@@ -74,6 +74,39 @@ That's it — ask the agent things like *"what's on my calendar next week?"* or
 | `YANDEX_CALENDAR_APP_PASSWORD` | yes | — | App password for CalDAV (see step 1). |
 | `YANDEX_CALENDAR_BASE_URL` | no | `https://caldav.yandex.ru` | Override for self-hosted / testing. |
 | `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendar names the plugin may use, e.g. `Work,Personal`. The first is the default calendar. |
+| `YANDEX_CALENDAR_ACTIONS` | no | *(all)* | Comma-separated allow-list of actions the agent may perform — see below. |
+
+### Restricting what the agent can do
+
+`YANDEX_CALENDAR_ACTIONS` decides which of the seven tools are registered at all.
+A disallowed action is not merely refused at call time: the tool never appears in
+the agent's toolset, so it cannot be invoked, and the model is not tempted to try.
+
+Accepted values, comma-separated and case-insensitive — individual actions
+(`list_calendars`, `list_events`, `create_event`, `update_event`, `respond_event`,
+`move_event`, `delete_event`) or the shorthands:
+
+| Shorthand | Expands to |
+|---|---|
+| `read` | `list_calendars`, `list_events` |
+| `write` | `create_event`, `update_event`, `respond_event`, `move_event` |
+| `delete` | `delete_event` |
+| `all` | everything (the default) |
+
+```dotenv
+# Look, but don't touch:
+YANDEX_CALENDAR_ACTIONS=read
+
+# Full scheduling, but the agent can never delete anything:
+YANDEX_CALENDAR_ACTIONS=read,write
+
+# Just enough to answer invitations:
+YANDEX_CALENDAR_ACTIONS=list_events,respond_event
+```
+
+Leave it unset for all seven tools. A name that matches nothing is ignored, so a
+typo can only ever withhold a tool, never grant one. The list is applied when the
+plugin loads — restart Hermes after changing it.
 
 Credentials are read from the environment first, then from `~/.hermes/.env`, so they
 work in gateway and subprocess runs. Secret values are never logged.
