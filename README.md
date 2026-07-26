@@ -182,12 +182,27 @@ so use addresses you own.
 ```bash
 YANDEX_CALENDAR_LOGIN=you@yandex.ru \
 YANDEX_CALENDAR_APP_PASSWORD=xxxx \
+YC_E2E_ATTENDEES=you+guest@yandex.ru \
 pytest -m e2e
 ```
 
-Or keep the credentials in `~/.yandex-calendar-login` and
-`~/.yandex-calendar-app-password` (plus optional `~/.yandex-calendar-attendees`)
-and just run `pytest -m e2e` — see `tests/e2e/conftest.py`.
+`YC_E2E_ATTENDEES` is the comma-separated list of addresses the throwaway event
+invites, and each one really is emailed an invitation — so list mailboxes you own.
+Omit it and the suite falls back to a `+e2e` sub-address of the account itself,
+which lands in your own inbox. Two constraints, both learned the hard way against
+the live server:
+
+- **The addresses must exist.** A made-up one (`guest@example.com`) bounces back
+  into your mailbox.
+- **They must not resolve to the account itself.** Yandex canonicalises addresses
+  (`@ya.ru` → `@yandex.ru`) and drops an attendee that equals the `ORGANIZER`, so a
+  plain alias of your own login silently disappears and the round-trip check fails.
+  A `+tag` sub-address is delivered to the same mailbox but stays a distinct
+  attendee.
+
+Or keep all three out of the command line, in `~/.yandex-calendar-login`,
+`~/.yandex-calendar-app-password`, and `~/.yandex-calendar-attendees`, and just run
+`pytest -m e2e` — see `tests/e2e/conftest.py`.
 
 ### On GitHub Actions
 
