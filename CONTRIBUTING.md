@@ -49,7 +49,11 @@ The plugin follows the Hermes plugin contract; a few of these are load-bearing:
 ```bash
 ruff check . && ruff format --check .
 pytest --cov=hermes_yandex_calendar --cov-fail-under=90
+radon cc -s -n C hermes_yandex_calendar   # must print nothing
 ```
+
+CI fails on any function radon rates **C or worse** — split it instead of raising
+the bar. `radon cc -a hermes_yandex_calendar` shows the average.
 
 Unit tests must not hit the network — mock HTTP with `httpx.MockTransport`. Live
 tests go under `tests/e2e/`, are marked `@pytest.mark.e2e`, and skip when credentials

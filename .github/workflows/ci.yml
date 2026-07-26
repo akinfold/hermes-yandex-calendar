@@ -24,6 +24,16 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: ruff check .
       - run: ruff format --check .
+      - name: Complexity gate (radon)
+        run: |
+          set -euo pipefail
+          report=$(radon cc -s -n C hermes_yandex_calendar)
+          if [ -n "$report" ]; then
+            echo "$report"
+            echo "::error::Functions rated C or worse — split them before merging."
+            exit 1
+          fi
+          radon cc -a hermes_yandex_calendar | tail -1
 
   test:
     name: Unit tests (py${{ matrix.python-version }})
