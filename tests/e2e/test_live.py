@@ -94,7 +94,11 @@ def test_create_then_delete_roundtrip():
 
             reread = client.get_event(created.href)
             assert reread is not None
-            assert any(a.email == guest for a in reread.attendees)
+            returned = [a.email for a in reread.attendees]
+            organizer = reread.organizer.email if reread.organizer else None
+            assert any(a.email == guest for a in reread.attendees), (
+                f"invited {guest}; server returned attendees={returned} organizer={organizer}"
+            )
             assert reread.transp == "TRANSPARENT"
         finally:
             client.delete_event(created.href)
