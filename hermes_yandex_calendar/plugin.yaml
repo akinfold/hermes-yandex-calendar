@@ -1,5 +1,5 @@
 name: yandex_calendar
-version: 0.2.0
+version: 0.2.1
 description: "List, create, update, and delete Yandex Calendar events over CalDAV (attendees, busy status, multiple calendars). Requires YANDEX_CALENDAR_LOGIN and YANDEX_CALENDAR_APP_PASSWORD; YANDEX_CALENDAR_ACTIONS restricts which tools are exposed."
 author: akinfold
 kind: standalone
