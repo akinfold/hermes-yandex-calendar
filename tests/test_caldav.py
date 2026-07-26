@@ -71,10 +71,10 @@ END:VEVENT
 END:VCALENDAR"""
 
 
-def make_client(handler, *, allowed=None) -> YandexCalDAVClient:
+def make_client(handler, *, allowed=None, login="user@yandex.ru") -> YandexCalDAVClient:
     transport = httpx.MockTransport(handler)
     http = httpx.Client(transport=transport)
-    return YandexCalDAVClient("user@yandex.ru", "app-pw", client=http, allowed_calendars=allowed)
+    return YandexCalDAVClient(login, "app-pw", client=http, allowed_calendars=allowed)
 
 
 def test_discover_calendars_filters_non_calendars():
@@ -366,6 +366,56 @@ def test_respond_to_event_sets_own_partstat():
     # our own attendee flips to ACCEPTED; the other attendee stays as-is
     assert "ATTENDEE;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:user@yandex.ru" in body
     assert "ATTENDEE:mailto:other@x.ru" in body
+
+
+def test_respond_matches_ya_ru_login_against_yandex_ru_attendee():
+    """Yandex rewrites @ya.ru to @yandex.ru, so the login must still match the ATTENDEE."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=MEETING_ICS)
+        seen["body"] = request.content.decode()
+        return httpx.Response(204)
+
+    client = make_client(handler, login="User@ya.ru")
+    client.respond_to_event("/cal/evt-1.ics", "ACCEPTED")
+    assert "ATTENDEE;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:user@yandex.ru" in seen["body"]
+
+
+def test_respond_matches_yandex_ru_login_against_ya_ru_attendee():
+    seen = {}
+    ics = MEETING_ICS.replace("mailto:user@yandex.ru", "mailto:USER@ya.ru")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=ics)
+        seen["body"] = request.content.decode()
+        return httpx.Response(204)
+
+    client = make_client(handler, login="user@yandex.ru")
+    client.respond_to_event("/cal/evt-1.ics", "DECLINED")
+    assert "ATTENDEE;PARTSTAT=DECLINED;RSVP=FALSE:mailto:USER@ya.ru" in seen["body"]
+
+
+def test_respond_matches_other_yandex_domain_aliases():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=MEETING_ICS)
+        seen["body"] = request.content.decode()
+        return httpx.Response(204)
+
+    client = make_client(handler, login="user@yandex.com")
+    client.respond_to_event("/cal/evt-1.ics", "TENTATIVE")
+    assert "PARTSTAT=TENTATIVE" in seen["body"]
+
+
+def test_respond_does_not_fold_unrelated_domains():
+    client = make_client(lambda r: httpx.Response(200, text=MEETING_ICS), login="user@x.ru")
+    with pytest.raises(CalDAVError, match="not listed as an attendee"):
+        client.respond_to_event("/cal/evt-1.ics", "ACCEPTED")
 
 
 def test_respond_when_not_attendee_raises():

@@ -49,6 +49,23 @@ def _findall_local(element, name: str) -> list:
     return [e for e in element.iter() if _local(e.tag) == name]
 
 
+# Yandex delivers all of these to the same mailbox and rewrites addresses to the
+# canonical @yandex.ru form, so an event created with an @ya.ru ORGANIZER/ATTENDEE
+# comes back as @yandex.ru. Compare mailboxes with the domain folded to one name.
+_YANDEX_DOMAIN_ALIASES = frozenset(
+    {"ya.ru", "yandex.ru", "yandex.com", "yandex.by", "yandex.kz", "yandex.ua", "narod.ru"}
+)
+
+
+def _normalize_email(address: str) -> str:
+    """Lowercase an address and fold Yandex's interchangeable mail domains together."""
+    normalized = address.strip().lower()
+    local, sep, domain = normalized.rpartition("@")
+    if sep and domain in _YANDEX_DOMAIN_ALIASES:
+        return f"{local}@yandex.ru"
+    return normalized
+
+
 def _fmt_utc(value: datetime | date) -> str:
     if isinstance(value, datetime):
         dt = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
@@ -330,12 +347,14 @@ class YandexCalDAVClient:
 
         Flips the PARTSTAT on the ATTENDEE entry matching the logged-in address and
         PUTs the event back, which the server processes as the invitation reply.
+        Matching ignores case and Yandex's interchangeable mail domains, since the
+        server rewrites e.g. ``@ya.ru`` addresses to their ``@yandex.ru`` form.
         """
         event = self.get_event(event_href)
         if event is None:
             raise CalDAVError(f"Event not found: {event_href}")
-        me = self.login.strip().lower()
-        mine = next((a for a in event.attendees if a.email.strip().lower() == me), None)
+        me = _normalize_email(self.login)
+        mine = next((a for a in event.attendees if _normalize_email(a.email) == me), None)
         if mine is None:
             raise CalDAVError(
                 f"{self.login} is not listed as an attendee of this event; cannot respond."
