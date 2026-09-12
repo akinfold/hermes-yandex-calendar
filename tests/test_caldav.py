@@ -930,3 +930,39 @@ def test_move_event_keeps_the_original_when_the_copy_fails():
     with pytest.raises(CalDAVError, match="Moving event failed"):
         client.move_event("/calendars/user@yandex.ru/events-99/evt-rec.ics", "events-42")
     assert "DELETE" not in calls
+
+
+def test_over_long_href_becomes_caldav_error_without_a_request():
+    """Past httpx's URL length cap httpx raises InvalidURL, which is not an HTTPError."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        return httpx.Response(204)
+
+    with pytest.raises(CalDAVError, match="CalDAV request failed"):
+        make_client(handler).delete_event("/cal/" + "a" * 70_000 + ".ics")
+    assert seen == []
+
+
+_PERCENT_ENCODED_CALENDARS = TWO_CALENDARS.replace("user@yandex.ru", "user%40yandex.ru")
+
+
+@pytest.mark.parametrize(
+    ("listing", "ref"),
+    [
+        (_PERCENT_ENCODED_CALENDARS, "/calendars/user@yandex.ru/events-42/"),
+        (TWO_CALENDARS, "/calendars/user%40yandex.ru/events-42/"),
+    ],
+)
+def test_resolve_matches_href_regardless_of_at_sign_encoding(listing, ref):
+    client = make_client(lambda request: httpx.Response(207, text=listing), allowed=["Work"])
+    assert client.resolve_calendar_href(ref).endswith("/events-42/")
+
+
+def test_resolve_still_rejects_href_outside_the_allow_list():
+    client = make_client(
+        lambda request: httpx.Response(207, text=_PERCENT_ENCODED_CALENDARS), allowed=["Work"]
+    )
+    with pytest.raises(CalDAVError, match="not found"):
+        client.resolve_calendar_href("/calendars/user@yandex.ru/events-99/")

@@ -34,9 +34,8 @@ hermes plugins install akinfold/hermes-yandex-calendar --enable
 
 # 2. Add your credentials — the app password comes from
 #    https://id.yandex.ru/security/app-passwords (scope: "Calendar (CalDAV)")
-umask 077
-printf 'YANDEX_CALENDAR_LOGIN=%s\nYANDEX_CALENDAR_APP_PASSWORD=%s\n' \
-  'you@yandex.ru' 'your-app-password' >> ~/.hermes/.env
+(umask 077 && printf 'YANDEX_CALENDAR_LOGIN=%s\nYANDEX_CALENDAR_APP_PASSWORD=%s\n' \
+  'you@yandex.ru' 'your-app-password' >> ~/.hermes/.env)
 chmod 600 ~/.hermes/.env
 ```
 

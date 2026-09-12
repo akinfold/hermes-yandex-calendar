@@ -475,3 +475,31 @@ def test_attendee_object_missing_email(patch_client):
         )
     )
     assert "error" in out and "email" in out["error"]
+
+
+@pytest.mark.parametrize(
+    "email",
+    ["ivan@пример.рф", "иван@yandex.ru", "Иван@Почта.РФ", "ivan@xn--e1afmkfd.xn--p1ai"],
+)
+def test_create_accepts_idn_and_utf8_attendees(patch_client, email):
+    fake = FakeClient()
+    patch_client(fake)
+    args = {"summary": "Meet", "start": "2026-07-25T10:00:00Z", "attendees": [email]}
+    out = json.loads(tool.handle_create(args))
+    assert out["created"] is True
+    assert fake.created.attendees[0].email == email  # stored as written, not punycoded
+
+
+@pytest.mark.parametrize("email", ["ivan@-bad-.рф", "ivan@пример..рф", "иван\u0085@yandex.ru"])
+def test_create_still_rejects_malformed_idn_attendees(patch_client, email):
+    patch_client(FakeClient())
+    args = {"summary": "Meet", "start": "2026-07-25T10:00:00Z", "attendees": [email]}
+    out = json.loads(tool.handle_create(args))
+    assert "Invalid attendee email address" in out["error"]
+
+
+def test_over_long_href_is_a_clean_error(patch_client):
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(204))) as http:
+        patch_client(YandexCalDAVClient("user@yandex.ru", "app-pw", client=http))
+        out = json.loads(tool.handle_delete({"event_href": "/cal/" + "a" * 70_000 + ".ics"}))
+    assert out["error"].startswith("CalDAV request failed")
