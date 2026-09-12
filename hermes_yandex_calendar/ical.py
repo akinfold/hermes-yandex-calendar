@@ -77,6 +77,8 @@ def _unfold(text: str) -> list[str]:
 
 def _fold(line: str) -> str:
     """Fold a content line to <=75 octets, continuation lines prefixed with a space."""
+    if "\r" in line or "\n" in line:
+        raise ValueError("iCalendar content lines must not contain a line break.")
     encoded = line.encode("utf-8")
     if len(encoded) <= 75:
         return line
@@ -110,13 +112,30 @@ def _unescape(value: str) -> str:
 
 
 def _escape(value: str) -> str:
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
 
 
 def _split_prop(line: str) -> tuple[str, dict[str, str], str]:
     """Return (NAME, params, value) for a content line like ``DTSTART;TZID=X:val``."""
-    name_part, _, value = line.partition(":")
-    pieces = name_part.split(";")
+    pieces: list[str] = []
+    chunk: list[str] = []
+    quoted = False
+    value = ""
+    for index, char in enumerate(line):
+        if char == '"':
+            quoted = not quoted
+        if char == ":" and not quoted:
+            pieces.append("".join(chunk))
+            value = line[index + 1 :]
+            break
+        if char == ";" and not quoted:
+            pieces.append("".join(chunk))
+            chunk = []
+        else:
+            chunk.append(char)
+    else:
+        pieces.append("".join(chunk))
     name = pieces[0].upper()
     params: dict[str, str] = {}
     for piece in pieces[1:]:
@@ -148,8 +167,15 @@ def _parse_cal_address(value: str, params: dict[str, str]) -> Attendee:
     )
 
 
+def _validate_cal_address(attendee: Attendee) -> None:
+    values = (attendee.email, attendee.name, attendee.role, attendee.partstat)
+    if any("\r" in value or "\n" in value for value in values):
+        raise ValueError("Calendar addresses must not contain a line break.")
+
+
 def _format_cal_address(prop: str, attendee: Attendee) -> str:
     """Serialize an ATTENDEE/ORGANIZER content line."""
+    _validate_cal_address(attendee)
     parts = [prop]
     if attendee.name:
         parts.append(f"CN={_param_value(attendee.name)}")
@@ -159,7 +185,10 @@ def _format_cal_address(prop: str, attendee: Attendee) -> str:
         parts.append(f"PARTSTAT={_param_value(attendee.partstat)}")
     if attendee.rsvp is not None:
         parts.append(f"RSVP={'TRUE' if attendee.rsvp else 'FALSE'}")
-    return ";".join(parts) + f":mailto:{attendee.email}"
+    address = attendee.email
+    if ":" not in address:
+        address = f"mailto:{address}"
+    return ";".join(parts) + f":{address}"
 
 
 # --- datetime handling -----------------------------------------------------

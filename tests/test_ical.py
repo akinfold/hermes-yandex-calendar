@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from hermes_yandex_calendar.ical import Event, build_calendar, parse_events
+import pytest
+
+from hermes_yandex_calendar.ical import Attendee, Event, build_calendar, parse_events
 
 
 def test_parse_utc_event():
@@ -135,9 +137,19 @@ def test_parse_attendees_organizer_transp():
     assert event.attendees[1].rsvp is None
 
 
-def test_build_attendees_roundtrip():
-    from hermes_yandex_calendar.ical import Attendee
+def test_parse_quoted_calendar_address_parameters():
+    text = (
+        "BEGIN:VEVENT\r\n"
+        "UID:quoted\r\n"
+        'ATTENDEE;CN="Alice; VP: Sales";PARTSTAT=NEEDS-ACTION:mailto:alice@x.ru\r\n'
+        "END:VEVENT\r\n"
+    )
+    (event,) = parse_events(text)
+    assert event.attendees[0].name == "Alice; VP: Sales"
+    assert event.attendees[0].partstat == "NEEDS-ACTION"
 
+
+def test_build_attendees_roundtrip():
     event = Event(
         uid="m-2",
         summary="Plan",
@@ -154,6 +166,48 @@ def test_build_attendees_roundtrip():
     assert parsed.attendees[0].email == "a@x.ru"
     assert parsed.attendees[0].name == "A, B"
     assert parsed.attendees[0].rsvp is True
+
+
+@pytest.mark.parametrize(
+    "attendee",
+    [
+        Attendee(email="safe@example.com\r\nX-INJECTED:YES"),
+        Attendee(email="safe@example.com", name="Safe\r\nX-INJECTED:YES"),
+        Attendee(email="safe@example.com", role="REQ-PARTICIPANT\r\nX-INJECTED:YES"),
+        Attendee(email="safe@example.com", partstat="ACCEPTED\r\nX-INJECTED:YES"),
+    ],
+)
+def test_build_rejects_line_break_in_calendar_address(attendee):
+    event = Event(uid="injection", attendees=[attendee])
+    with pytest.raises(ValueError, match="line break"):
+        build_calendar(event)
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        "not-an-email",
+        "first@second@example.com",
+        "mailto:safe@example.com",
+        "safe@example.com?subject=unexpected",
+        "safe@example.com;mailto:other@example.com",
+    ],
+)
+def test_build_preserves_server_calendar_address(email):
+    event = Event(uid="invalid-address", attendees=[Attendee(email=email)])
+    assert email in build_calendar(event)
+
+
+def test_build_normalizes_text_line_breaks_before_escaping():
+    event = Event(uid="multiline", description="first\r\nsecond\rthird")
+    ics = build_calendar(event)
+    assert "DESCRIPTION:first\\nsecond\\nthird\r\n" in ics
+
+
+def test_build_rejects_line_break_in_raw_property():
+    event = Event(uid="event", raw_props=["X-CUSTOM:value\r\nX-INJECTED:YES"])
+    with pytest.raises(ValueError, match="line break"):
+        build_calendar(event)
 
 
 def test_raw_props_are_preserved_on_roundtrip():
