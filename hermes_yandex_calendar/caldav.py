@@ -163,13 +163,15 @@ def _calendar_from_response(response) -> Calendar | None:
 
 
 def _calendar_matches(cal: Calendar, ref: str) -> bool:
-    """Does ``ref`` name this calendar — by display name, path segment, or href?"""
+    """Does ``ref`` name this calendar — by display name or last path segment?
+
+    Hrefs are compared by :meth:`YandexCalDAVClient._same_collection`, which
+    canonicalises both sides the way requests are sent.
+    """
     needle = ref.strip().lower()
     segments = [p for p in cal.href.split("/") if p]
-    return (
-        cal.display_name.strip().lower() == needle
-        or (bool(segments) and segments[-1].strip().lower() == needle)
-        or cal.href.rstrip("/") == urlsplit(ref).path.rstrip("/")
+    return cal.display_name.strip().lower() == needle or (
+        bool(segments) and segments[-1].strip().lower() == needle
     )
 
 
@@ -262,6 +264,29 @@ class YandexCalDAVClient:
     def _collection_key(self, href: str) -> str:
         return _canonical_path(_split_url(self._url(href)).path).rstrip("/") + "/"
 
+    def _find_calendar(self, calendars: list[Calendar], ref: str) -> Calendar | None:
+        """The calendar ``ref`` names — by display name, path segment, or href."""
+        return next(
+            (
+                c
+                for c in calendars
+                if _calendar_matches(c, ref) or self._same_collection(c.href, ref)
+            ),
+            None,
+        )
+
+    def _same_collection(self, href: str, ref: str) -> bool:
+        """Compare two collection references the way the server addresses them.
+
+        Both sides are canonicalised, so ``user%40yandex.ru`` and ``user@yandex.ru``
+        name the same calendar. A reference that cannot be canonicalised matches
+        nothing.
+        """
+        try:
+            return self._collection_key(href) == self._collection_key(ref)
+        except CalDAVError:
+            return False
+
     def _request(self, method: str, href: str, *, content: str | None = None, headers=None):
         try:
             resp = self._client.request(
@@ -270,7 +295,9 @@ class YandexCalDAVClient:
                 content=content.encode("utf-8") if content is not None else None,
                 headers=headers,
             )
-        except (httpx.HTTPError, ValueError) as exc:
+        # httpx.InvalidURL (e.g. a URL past httpx's length cap) is neither an
+        # HTTPError nor a ValueError, so it has to be named here.
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
             raise CalDAVError(f"CalDAV request failed: {exc}") from exc
         if resp.status_code in (401, 403):
             raise CalDAVError(
@@ -359,9 +386,9 @@ class YandexCalDAVClient:
             raise CalDAVError(f"No calendars available{hint}.")
         if ref is None or not ref.strip():
             return calendars[0].href
-        for cal in calendars:
-            if _calendar_matches(cal, ref):
-                return cal.href
+        found = self._find_calendar(calendars, ref)
+        if found is not None:
+            return found.href
         names = ", ".join(repr(c.display_name or c.href) for c in calendars)
         raise CalDAVError(f"Calendar {ref!r} not found. Available calendars: {names}.")
 

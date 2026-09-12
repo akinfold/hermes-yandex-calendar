@@ -32,7 +32,8 @@ _CALENDAR_HINT = (
 # strict function-calling validators. Handlers still accept objects if a model
 # sends them anyway.
 _ATTENDEE_HINT = "Each entry is an email ('a@x.ru') or a 'Name <a@x.ru>' string."
-_MAILBOX_ATOM = r"[A-Za-z0-9!#$'*+\-=^_`{|}~]+"
+# RFC 6531 allows UTF-8 local parts; C0 and C1 control characters stay out.
+_MAILBOX_ATOM = r"[A-Za-z0-9!#$'*+\-=^_`{|}~\u00a0-\U0010ffff]+"
 _MAILBOX_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
 _MAILBOX = re.compile(
     rf"{_MAILBOX_ATOM}(?:\.{_MAILBOX_ATOM})*@{_MAILBOX_LABEL}(?:\.{_MAILBOX_LABEL})*"
@@ -239,11 +240,26 @@ def _parse_attendee(item: Any) -> Attendee:
     return attendee
 
 
+def _idna_mailbox(address: str) -> str:
+    """``address`` with its domain IDNA-encoded (``пример.рф`` -> ``xn--e1afmkfd.xn--p1ai``).
+
+    Used for validation only: the address is stored exactly as the caller wrote it.
+    A domain the codec refuses comes back unchanged, for the pattern to reject.
+    """
+    local, sep, domain = address.rpartition("@")
+    if not sep:
+        return address
+    try:
+        return f"{local}@{domain.encode('idna').decode('ascii')}"
+    except UnicodeError:
+        return address
+
+
 def _validate_input_attendee(attendee: Attendee) -> None:
     values = (attendee.email, attendee.name, attendee.role, attendee.partstat)
     if any("\r" in value or "\n" in value for value in values):
         raise ValueError("Calendar addresses must not contain a line break.")
-    if _MAILBOX.fullmatch(attendee.email) is None:
+    if _MAILBOX.fullmatch(_idna_mailbox(attendee.email)) is None:
         raise ValueError(f"Invalid attendee email address: {attendee.email!r}.")
 
 
