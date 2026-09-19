@@ -170,32 +170,51 @@ def test_concurrent_change_is_refused():
 def test_move_between_calendars():
     """A move must land the event in the target and clear the source.
 
-    Covers the conditional delete from the happy side: the original is removed only
-    when it still matches the copy, and that must not get in the way of a plain move.
+    Covers the conditional delete from the happy side: the original goes only when
+    it still matches the copy, and that must not get in the way of a plain move.
+    The target is probed first — an account can expose a calendar that accepts a
+    PUT without storing it (holidays and birthdays are served that way), and that
+    would fail this test for a reason that has nothing to do with moving.
     """
     marker = os.environ.get("YC_E2E_MARKER", "hermes-e2e")
     start = datetime.now(UTC) + timedelta(days=402)
+
+    def throwaway(suffix: str) -> Event:
+        return Event(
+            uid="",
+            summary=f"{marker} {suffix}",
+            start=start,
+            end=start + timedelta(hours=1),
+            description="Created by hermes-yandex-calendar e2e; safe to delete.",
+        )
+
     with build_client() as client:
         calendars = client.list_calendars()
-        if len(calendars) < 2:
-            pytest.skip("need two calendars to move an event between them")
-        source, target = calendars[0], calendars[1]
-        created = client.create_event(
-            Event(
-                uid="",
-                summary=f"{marker} move",
-                start=start,
-                end=start + timedelta(hours=1),
-                description="Created by hermes-yandex-calendar e2e; safe to delete.",
-            ),
-            calendar=source.href,
-        )
+        target = None
+        for candidate in calendars[1:]:
+            try:
+                probe = client.create_event(throwaway("probe"), calendar=candidate.href)
+            except CalDAVError:
+                continue
+            stored = client.get_event(probe.href) is not None
+            client.delete_event(probe.href)
+            if stored:
+                target = candidate
+                break
+        if target is None:
+            pytest.skip("no second calendar that accepts an event and returns it")
+
+        created = client.create_event(throwaway("move"), calendar=calendars[0].href)
         moved = None
         try:
             moved = client.move_event(created.href, target.href)
             assert moved.href != created.href
             reread = client.get_event(moved.href)
-            assert reread is not None
+            if reread is None:
+                window = (start - timedelta(hours=1), start + timedelta(hours=2))
+                listing = client.list_events(*window, calendar=target.href)
+                names = sorted((e.href or "").rsplit("/", 1)[-1] for e in listing)
+                raise AssertionError(f"copy not readable at {moved.href}; target holds {names}")
             assert reread.summary.endswith("move")
             assert client.get_event(created.href) is None  # the original is gone
         finally:
