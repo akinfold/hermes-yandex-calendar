@@ -19,8 +19,9 @@ your real calendar, over CalDAV, with no third-party service in the middle.
   specific actions (`read`, `read,write`, …). A disallowed action is not in the
   toolset at all.
 - 🛟 **Careful with your data** — recurrence rules, alarms, and properties this
-  plugin does not model survive every edit; moves copy the resource byte for byte;
-  an event is deleted only after its copy is safely in place.
+  plugin does not model survive every edit; an edit that would overwrite someone
+  else's concurrent change is refused; moves copy the resource byte for byte; an
+  event is deleted only after its copy is safely in place.
 - 🔑 **App password, not your account password** — scoped to CalDAV, revocable in
   one click.
 
@@ -61,7 +62,7 @@ Up to seven standalone tools, in the `yandex_calendar` toolset:
 | `yandex_calendar_list_calendars` | List the calendars the plugin can use (name + `href`). |
 | `yandex_calendar_list_events` | List events in a time range (summary, start/end, location, description, attendees, busy status, and an `href`). |
 | `yandex_calendar_create_event` | Create an event (summary, start, optional end/location/description/all-day, attendees, busy status, target calendar). |
-| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free. Recurrence rules and alarms are preserved. |
+| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free. Recurrence rules and alarms are preserved, and a concurrent change by someone else is refused rather than overwritten. |
 | `yandex_calendar_respond_event` | Respond to a meeting invitation — accept, decline, or tentatively accept. |
 | `yandex_calendar_move_event` | Move an event to another calendar, contents intact. |
 | `yandex_calendar_delete_event` | Delete an event by `href`. |
@@ -146,6 +147,11 @@ the plugin loads: restart Hermes after changing it.
   must be mailbox addresses, while server-provided calendar addresses are preserved
   for compatible invitation updates. Line breaks are rejected during serialization
   to prevent CRLF property injection.
+- Edits are conditional. The plugin writes an event back only if it still matches
+  the version it read (`If-Match` with the resource's `ETag`), so an agent cannot
+  silently overwrite a change you made meanwhile in the Yandex web UI, on a phone,
+  or from another client. When that happens the tool says so and the agent can
+  re-read the event and reapply its change.
 - The action allow-list limits the tools exposed to Hermes; it does not reduce the
   privileges of the Yandex app password itself. Use a dedicated app password and,
   for stronger isolation, a dedicated Yandex account.

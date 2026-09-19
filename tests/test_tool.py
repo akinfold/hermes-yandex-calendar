@@ -503,3 +503,27 @@ def test_over_long_href_is_a_clean_error(patch_client):
         patch_client(YandexCalDAVClient("user@yandex.ru", "app-pw", client=http))
         out = json.loads(tool.handle_delete({"event_href": "/cal/" + "a" * 70_000 + ".ics"}))
     assert out["error"].startswith("CalDAV request failed")
+
+
+def test_update_reports_a_concurrent_change_as_a_clean_error(patch_client):
+    """The agent should be told to re-read, not see an unexpected error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                text="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:e\r\nSUMMARY:Old\r\n"
+                "DTSTART:20260725T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+                headers={"ETag": '"v1"'},
+            )
+        return httpx.Response(412)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        patch_client(YandexCalDAVClient("user@yandex.ru", "app-pw", client=http))
+        out = json.loads(
+            tool.handle_update(
+                {"event_href": "/calendars/user@yandex.ru/events-42/e.ics", "summary": "New"}
+            )
+        )
+    assert "changed on the server" in out["error"]
+    assert "Unexpected" not in out["error"]

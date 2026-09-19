@@ -14,13 +14,14 @@ see :func:`_attendee_emails`).
 
 from __future__ import annotations
 
+import copy
 import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from hermes_yandex_calendar._compat import get_provider_env
-from hermes_yandex_calendar.caldav import normalize_email
+from hermes_yandex_calendar.caldav import CalDAVError, normalize_email
 from hermes_yandex_calendar.config import ENV_LOGIN, ENV_PASSWORD, build_client
 from hermes_yandex_calendar.ical import Attendee, Event
 
@@ -124,3 +125,42 @@ def test_list_calendars_live():
         calendars = client.list_calendars()
         assert calendars
         assert all(c.href for c in calendars)
+
+
+@requires_creds
+def test_concurrent_change_is_refused():
+    """The server must honour If-Match: a write against a stale ETag is rejected.
+
+    Proves the optimistic-concurrency guard end to end — a unit test can only show
+    that the header is sent, not that Yandex acts on it.
+    """
+    marker = os.environ.get("YC_E2E_MARKER", "hermes-e2e")
+    start = datetime.now(UTC) + timedelta(days=401)
+    event = Event(
+        uid="",
+        summary=f"{marker} concurrency",
+        start=start,
+        end=start + timedelta(hours=1),
+        description="Created by hermes-yandex-calendar e2e; safe to delete.",
+    )
+    with build_client() as client:
+        created = client.create_event(event)
+        try:
+            first = client.get_event(created.href)
+            assert first is not None
+            if not first.etag:
+                pytest.skip("this server does not expose ETags for events")
+            stale = copy.deepcopy(first)
+
+            first.summary = f"{marker} concurrency (updated)"
+            client.update_event(first, created.href)
+
+            stale.summary = f"{marker} concurrency (stale write)"
+            with pytest.raises(CalDAVError, match="changed on the server"):
+                client.update_event(stale, created.href)
+
+            reread = client.get_event(created.href)
+            assert reread is not None
+            assert reread.summary.endswith("(updated)")  # the stale write did not land
+        finally:
+            client.delete_event(created.href)
