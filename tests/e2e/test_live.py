@@ -164,3 +164,39 @@ def test_concurrent_change_is_refused():
             assert reread.summary.endswith("(updated)")  # the stale write did not land
         finally:
             client.delete_event(created.href)
+
+
+@requires_creds
+def test_move_between_calendars():
+    """A move must land the event in the target and clear the source.
+
+    Covers the conditional delete from the happy side: the original is removed only
+    when it still matches the copy, and that must not get in the way of a plain move.
+    """
+    marker = os.environ.get("YC_E2E_MARKER", "hermes-e2e")
+    start = datetime.now(UTC) + timedelta(days=402)
+    with build_client() as client:
+        calendars = client.list_calendars()
+        if len(calendars) < 2:
+            pytest.skip("need two calendars to move an event between them")
+        source, target = calendars[0], calendars[1]
+        created = client.create_event(
+            Event(
+                uid="",
+                summary=f"{marker} move",
+                start=start,
+                end=start + timedelta(hours=1),
+                description="Created by hermes-yandex-calendar e2e; safe to delete.",
+            ),
+            calendar=source.href,
+        )
+        moved = None
+        try:
+            moved = client.move_event(created.href, target.href)
+            assert moved.href != created.href
+            reread = client.get_event(moved.href)
+            assert reread is not None
+            assert reread.summary.endswith("move")
+            assert client.get_event(created.href) is None  # the original is gone
+        finally:
+            client.delete_event((moved or created).href)

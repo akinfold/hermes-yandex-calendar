@@ -527,3 +527,30 @@ def test_update_reports_a_concurrent_change_as_a_clean_error(patch_client):
         )
     assert "changed on the server" in out["error"]
     assert "Unexpected" not in out["error"]
+
+
+def test_move_reports_a_left_behind_original_as_a_clean_error(patch_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                text="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:e\r\nSUMMARY:x\r\n"
+                "DTSTART:20260725T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+                headers={"ETag": '"v1"'},
+            )
+        if request.method == "PUT":
+            return httpx.Response(201)
+        return httpx.Response(412)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        patch_client(YandexCalDAVClient("user@yandex.ru", "app-pw", client=http))
+        out = json.loads(
+            tool.handle_move(
+                {
+                    "event_href": "/calendars/user@yandex.ru/events-42/e.ics",
+                    "calendar": "/calendars/user@yandex.ru/events-99/",
+                }
+            )
+        )
+    assert "both calendars" in out["error"]
+    assert "Unexpected" not in out["error"]
