@@ -20,8 +20,9 @@ your real calendar, over CalDAV, with no third-party service in the middle.
   toolset at all.
 - 🛟 **Careful with your data** — recurrence rules, alarms, and properties this
   plugin does not model survive every edit; an edit that would overwrite someone
-  else's concurrent change is refused; moves copy the resource byte for byte; an
-  event is deleted only after its copy is safely in place.
+  else's concurrent change is refused; moves copy the resource byte for byte, and
+  the original goes only once the copy has been read back from the target *and*
+  only if nobody changed it in between.
 - 🔑 **App password, not your account password** — scoped to CalDAV, revocable in
   one click.
 
@@ -151,7 +152,10 @@ the plugin loads: restart Hermes after changing it.
   the version it read (`If-Match` with the resource's `ETag`), so an agent cannot
   silently overwrite a change you made meanwhile in the Yandex web UI, on a phone,
   or from another client. When that happens the tool says so and the agent can
-  re-read the event and reapply its change.
+  re-read the event and reapply its change. A move is conditional at the same
+  point: the original is removed only if it still matches the copy that was just
+  written, and if it changed in between the event is left in both calendars with a
+  message saying so, rather than losing that change.
 - The action allow-list limits the tools exposed to Hermes; it does not reduce the
   privileges of the Yandex app password itself. Use a dedicated app password and,
   for stronger isolation, a dedicated Yandex account.

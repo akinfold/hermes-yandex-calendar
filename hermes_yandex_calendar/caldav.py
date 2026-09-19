@@ -584,6 +584,32 @@ class YandexCalDAVClient:
         mine.rsvp = False  # a reply has been sent; no further RSVP is expected
         return self.update_event(event, event_href)
 
+    def _copy_into(self, text: str, target: str, uid: str) -> str:
+        """PUT the raw resource into ``target`` and prove the copy is really there.
+
+        A 2xx is not proof: Yandex serves some calendars (holidays, birthdays)
+        read-only and accepts a PUT into them without storing anything. Deleting the
+        original on that promise would lose the event, so read the copy back.
+        """
+        href = self._validate_event_href(f"{target}{quote(uid, safe='')}.ics")
+        resp = self._request(
+            "PUT",
+            href,
+            content=text,
+            headers={"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"},
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise CalDAVError(f"Moving event failed: HTTP {resp.status_code}")
+        copied_to = _split_url(href).path or href
+        stored = self._fetch_document(href)
+        if stored is None or not stored[1]:
+            raise CalDAVError(
+                f"{target!r} accepted the copy but does not store it (nothing is readable "
+                f"at {copied_to}), so the event was left where it is. Some Yandex calendars "
+                "are read-only in this way."
+            )
+        return copied_to
+
     def move_event(self, event_href: str, target_calendar: str) -> Event:
         """Move an event to another calendar (copy into the target, then delete original).
 
@@ -595,7 +621,7 @@ class YandexCalDAVClient:
         document = self._fetch_document(event_href)
         if document is None:
             raise CalDAVError(f"Event not found: {event_href}")
-        text, events, _etag = document
+        text, events, etag = document
         if not events:
             raise CalDAVError(f"Resource holds no event: {event_href}")
         event = events[0]
@@ -606,22 +632,36 @@ class YandexCalDAVClient:
         if self._collection_key(source_collection) == self._collection_key(target):
             event.href = urlsplit(event_href).path or event_href
             return event  # already in the target calendar; nothing to do
-        href = self._validate_event_href(f"{target}{quote(event.uid, safe='')}.ics")
-        resp = self._request(
-            "PUT",
-            href,
-            content=text,
-            headers={"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"},
-        )
-        if resp.status_code not in (200, 201, 204):
-            raise CalDAVError(f"Moving event failed: HTTP {resp.status_code}")
-        self.delete_event(event_href)  # only remove the original once the copy exists
-        event.href = _split_url(href).path or href
+        copied_to = self._copy_into(text, target, event.uid)
+        # The copy is really there, so the original goes — but only if it is still
+        # the version that was copied. Removing a newer one would throw that change
+        # away; leaving it means the event exists twice, which the caller can undo.
+        try:
+            self.delete_event(event_href, etag=etag)
+        except CalDAVError as exc:
+            raise CalDAVError(
+                f"The event was copied to {copied_to}, but the original at {event_href} could "
+                f"not be removed ({exc}) — it is now in both calendars. Delete whichever copy "
+                "is not wanted."
+            ) from exc
+        event.href = copied_to
         return event
 
-    def delete_event(self, event_href: str) -> None:
-        """DELETE an event resource by its href (as returned by ``list_events``)."""
+    def delete_event(self, event_href: str, *, etag: str = "") -> None:
+        """DELETE an event resource by its href (as returned by ``list_events``).
+
+        Given the ``etag`` the event was read with, the delete is conditional
+        (``If-Match``): the server refuses it if the event changed meanwhile, so an
+        edit made after that read is never removed unnoticed. Without one the delete
+        is unconditional, as before.
+        """
         event_href = self._validate_event_href(event_href)
-        resp = self._request("DELETE", event_href)
+        headers = {"If-Match": etag} if etag else None
+        resp = self._request("DELETE", event_href, headers=headers)
+        if resp.status_code == 412:
+            raise CalDAVError(
+                "The event changed on the server since it was read, so it was not deleted. "
+                "Read it again and delete it if that is still what you want."
+            )
         if resp.status_code not in (200, 204, 404):
             raise CalDAVError(f"Deleting event failed: HTTP {resp.status_code}")

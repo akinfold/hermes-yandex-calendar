@@ -1058,3 +1058,73 @@ def test_list_events_carries_the_etag_of_each_resource(report_xml, expected):
     client = make_client(_discovery_then(report_xml))
     window = (datetime(2026, 7, 25, tzinfo=UTC), datetime(2026, 7, 26, tzinfo=UTC))
     assert [e.etag for e in client.list_events(*window)] == expected
+
+
+def _move_handler(delete_status: int, seen: dict):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=EVENT_ICS, headers={"ETag": '"v1"'})
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=TWO_CALENDARS)
+        if request.method == "PUT":
+            seen["put"] = request.url.path
+            return httpx.Response(201)
+        seen["delete_if_match"] = request.headers.get("If-Match")
+        return httpx.Response(delete_status)
+
+    return handler
+
+
+def test_move_removes_the_original_only_if_it_still_matches_the_copy():
+    seen: dict = {}
+    client = make_client(_move_handler(204, seen))
+    moved = client.move_event("/calendars/user@yandex.ru/events-42/evt-1.ics", "Personal")
+    assert seen["delete_if_match"] == '"v1"'
+    assert moved.href.endswith("/events-99/evt-1.ics")
+
+
+def test_move_leaves_both_copies_when_the_original_changed_meanwhile():
+    """Deleting a newer original would throw that change away; a duplicate is recoverable."""
+    seen: dict = {}
+    client = make_client(_move_handler(412, seen))
+    with pytest.raises(CalDAVError, match="both calendars"):
+        client.move_event("/calendars/user@yandex.ru/events-42/evt-1.ics", "Personal")
+    assert seen["put"].endswith("/events-99/evt-1.ics")  # the copy was written and stays
+
+
+def test_delete_without_an_etag_stays_unconditional():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["if_match"] = request.headers.get("If-Match")
+        return httpx.Response(204)
+
+    make_client(handler).delete_event("/cal/e.ics")
+    assert seen["if_match"] is None
+
+
+def test_delete_with_an_etag_refuses_when_the_event_changed():
+    client = make_client(lambda request: httpx.Response(412))
+    with pytest.raises(CalDAVError, match="not deleted"):
+        client.delete_event("/cal/e.ics", etag='"v1"')
+
+
+def test_move_keeps_the_original_when_the_target_does_not_store_the_copy():
+    """A 2xx from a read-only calendar is not proof; deleting on it loses the event."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=TWO_CALENDARS)
+        if request.method == "GET":
+            # the source reads back; the copy never materialises in the target
+            if request.url.path.endswith("/events-42/evt-1.ics"):
+                return httpx.Response(200, text=EVENT_ICS, headers={"ETag": '"v1"'})
+            return httpx.Response(404)
+        return httpx.Response(201)
+
+    client = make_client(handler)
+    with pytest.raises(CalDAVError, match="does not store it"):
+        client.move_event("/calendars/user@yandex.ru/events-42/evt-1.ics", "Personal")
+    assert "DELETE" not in calls  # the original survives
