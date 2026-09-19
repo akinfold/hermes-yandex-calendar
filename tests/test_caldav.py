@@ -1107,3 +1107,24 @@ def test_delete_with_an_etag_refuses_when_the_event_changed():
     client = make_client(lambda request: httpx.Response(412))
     with pytest.raises(CalDAVError, match="not deleted"):
         client.delete_event("/cal/e.ics", etag='"v1"')
+
+
+def test_move_keeps_the_original_when_the_target_does_not_store_the_copy():
+    """A 2xx from a read-only calendar is not proof; deleting on it loses the event."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=TWO_CALENDARS)
+        if request.method == "GET":
+            # the source reads back; the copy never materialises in the target
+            if request.url.path.endswith("/events-42/evt-1.ics"):
+                return httpx.Response(200, text=EVENT_ICS, headers={"ETag": '"v1"'})
+            return httpx.Response(404)
+        return httpx.Response(201)
+
+    client = make_client(handler)
+    with pytest.raises(CalDAVError, match="does not store it"):
+        client.move_event("/calendars/user@yandex.ru/events-42/evt-1.ics", "Personal")
+    assert "DELETE" not in calls  # the original survives

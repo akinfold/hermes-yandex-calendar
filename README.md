@@ -21,8 +21,8 @@ your real calendar, over CalDAV, with no third-party service in the middle.
 - 🛟 **Careful with your data** — recurrence rules, alarms, and properties this
   plugin does not model survive every edit; an edit that would overwrite someone
   else's concurrent change is refused; moves copy the resource byte for byte, and
-  the original goes only once the copy is in place *and* only if nobody changed it
-  in between.
+  the original goes only once the copy has been read back from the target *and*
+  only if nobody changed it in between.
 - 🔑 **App password, not your account password** — scoped to CalDAV, revocable in
   one click.
 
