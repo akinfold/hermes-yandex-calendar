@@ -966,3 +966,95 @@ def test_resolve_still_rejects_href_outside_the_allow_list():
     )
     with pytest.raises(CalDAVError, match="not found"):
         client.resolve_calendar_href("/calendars/user@yandex.ru/events-99/")
+
+
+ETAG_REPORT = REPORT_EVENTS.replace(
+    "<d:propstat><d:prop>", '<d:propstat><d:prop><d:getetag>"listed-1"</d:getetag>', 1
+)
+
+
+def test_update_sends_if_match_with_the_etag_it_read():
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=EVENT_ICS, headers={"ETag": '"v1"'})
+        seen["if_match"] = request.headers.get("If-Match")
+        return httpx.Response(204, headers={"ETag": '"v2"'})
+
+    client = make_client(handler)
+    event = client.get_event("/calendars/user@yandex.ru/events-42/evt-1.ics")
+    assert event is not None and event.etag == '"v1"'
+    updated = client.update_event(event, event.href)
+    assert seen["if_match"] == '"v1"'
+    assert updated.etag == '"v2"'  # refreshed, so the next write is conditional too
+
+
+def test_update_without_a_known_etag_stays_unconditional():
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["if_match"] = request.headers.get("If-Match")
+        return httpx.Response(204)
+
+    make_client(handler).update_event(Event(uid="e"), "/cal/e.ics")
+    assert seen["if_match"] is None
+
+
+def test_update_refuses_to_overwrite_a_concurrent_change():
+    """A 412 means someone else wrote first; the caller must re-read, not retry blindly."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=EVENT_ICS, headers={"ETag": '"v1"'})
+        return httpx.Response(412)
+
+    client = make_client(handler)
+    event = client.get_event("/calendars/user@yandex.ru/events-42/evt-1.ics")
+    with pytest.raises(CalDAVError, match="changed on the server"):
+        client.update_event(event, event.href)
+
+
+def test_update_forgets_the_etag_when_the_server_returns_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=EVENT_ICS, headers={"ETag": '"v1"'})
+        return httpx.Response(204)
+
+    client = make_client(handler)
+    event = client.get_event("/calendars/user@yandex.ru/events-42/evt-1.ics")
+    assert client.update_event(event, event.href).etag == ""
+
+
+def test_respond_to_event_is_conditional_too():
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=MEETING_ICS, headers={"ETag": '"m1"'})
+        seen["if_match"] = request.headers.get("If-Match")
+        return httpx.Response(204)
+
+    make_client(handler).respond_to_event("/cal/evt-1.ics", "ACCEPTED")
+    assert seen["if_match"] == '"m1"'
+
+
+def _discovery_then(report_xml: str):
+    """Answer the discovery PROPFIND first, then the calendar-query REPORT."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=MULTISTATUS_CALENDARS)
+        return httpx.Response(207, text=report_xml)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("report_xml", "expected"),
+    [(ETAG_REPORT, ['"listed-1"']), (REPORT_EVENTS, [""])],
+)
+def test_list_events_carries_the_etag_of_each_resource(report_xml, expected):
+    client = make_client(_discovery_then(report_xml))
+    window = (datetime(2026, 7, 25, tzinfo=UTC), datetime(2026, 7, 26, tzinfo=UTC))
+    assert [e.etag for e in client.list_events(*window)] == expected

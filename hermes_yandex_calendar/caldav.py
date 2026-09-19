@@ -162,6 +162,22 @@ def _calendar_from_response(response) -> Calendar | None:
     return Calendar(href=urlsplit(href).path or href, display_name=display)
 
 
+def _events_from_response(response) -> list[Event]:
+    """The events in one REPORT ``response``, tagged with its href and ETag."""
+    data_el = next(iter(_findall_local(response, "calendar-data")), None)
+    if data_el is None or not (data_el.text or "").strip():
+        return []
+    href_el = next(iter(_findall_local(response, "href")), None)
+    href = (href_el.text or "").strip() if href_el is not None else ""
+    etag_el = next(iter(_findall_local(response, "getetag")), None)
+    etag = (etag_el.text or "").strip() if etag_el is not None else ""
+    events = parse_events(data_el.text)
+    for event in events:
+        event.href = urlsplit(href).path or href
+        event.etag = etag
+    return events
+
+
 def _calendar_matches(cal: Calendar, ref: str) -> bool:
     """Does ``ref`` name this calendar — by display name or last path segment?
 
@@ -450,25 +466,18 @@ class YandexCalDAVClient:
             raise CalDAVError(f"Could not parse calendar-query response: {exc}") from exc
         events: list[Event] = []
         for response in _findall_local(root, "response"):
-            href_el = next(iter(_findall_local(response, "href")), None)
-            href = (href_el.text or "").strip() if href_el is not None else ""
-            data_el = next(iter(_findall_local(response, "calendar-data")), None)
-            if data_el is None or not (data_el.text or "").strip():
-                continue
-            for event in parse_events(data_el.text):
-                event.href = urlsplit(href).path or href
-                events.append(event)
+            events.extend(_events_from_response(response))
         return events
 
-    def _fetch_document(self, event_href: str) -> tuple[str, list[Event]] | None:
-        """GET an event resource, returning its raw text and every VEVENT in it."""
+    def _fetch_document(self, event_href: str) -> tuple[str, list[Event], str] | None:
+        """GET an event resource: its raw text, every VEVENT in it, and its ETag."""
         event_href = self._validate_event_href(event_href)
         resp = self._request("GET", event_href)
         if resp.status_code == 404:
             return None
         if resp.status_code >= 400:
             raise CalDAVError(f"Fetching event failed: HTTP {resp.status_code}")
-        return resp.text, parse_events(resp.text)
+        return resp.text, parse_events(resp.text), resp.headers.get("ETag", "").strip()
 
     def get_event(self, event_href: str) -> Event | None:
         """GET a single event resource and parse it. Returns ``None`` if it is gone.
@@ -481,7 +490,7 @@ class YandexCalDAVClient:
         document = self._fetch_document(event_href)
         if document is None:
             return None
-        _text, events = document
+        _text, events, etag = document
         if not events:
             return None
         if len(events) > 1:
@@ -492,6 +501,7 @@ class YandexCalDAVClient:
             )
         event = events[0]
         event.href = urlsplit(event_href).path or event_href
+        event.etag = etag
         return event
 
     # -- write --------------------------------------------------------------
@@ -520,18 +530,37 @@ class YandexCalDAVClient:
         return event
 
     def update_event(self, event: Event, event_href: str) -> Event:
-        """PUT a modified event back to its existing resource (overwrites in place)."""
+        """PUT a modified event back to its existing resource.
+
+        When the event carries the ``ETag`` it was read with, the write is
+        conditional (``If-Match``): if anyone else changed the event meanwhile —
+        the Yandex web UI, a phone, another agent — the server refuses the write
+        instead of letting it overwrite their change, and the caller is told to
+        read the event again. Events built by hand carry no ETag and are written
+        unconditionally, as before.
+        """
         event_href = self._validate_event_href(event_href)
         self._ensure_organizer(event)
+        headers = {"Content-Type": "text/calendar; charset=utf-8"}
+        if event.etag:
+            headers["If-Match"] = event.etag
         resp = self._request(
             "PUT",
             event_href,
             content=build_calendar(event, dtstamp=datetime.now(UTC)),
-            headers={"Content-Type": "text/calendar; charset=utf-8"},
+            headers=headers,
         )
+        if resp.status_code == 412:
+            raise CalDAVError(
+                "The event changed on the server since it was read, so it was left "
+                "untouched. Read it again and reapply the change."
+            )
         if resp.status_code not in (200, 201, 204):
             raise CalDAVError(f"Updating event failed: HTTP {resp.status_code}")
         event.href = urlsplit(event_href).path or event_href
+        # The stored version is stale after our own write; take the new one when
+        # the server offers it, otherwise fall back to an unconditional next write.
+        event.etag = resp.headers.get("ETag", "").strip()
         return event
 
     def respond_to_event(self, event_href: str, partstat: str) -> Event:
@@ -566,7 +595,7 @@ class YandexCalDAVClient:
         document = self._fetch_document(event_href)
         if document is None:
             raise CalDAVError(f"Event not found: {event_href}")
-        text, events = document
+        text, events, _etag = document
         if not events:
             raise CalDAVError(f"Resource holds no event: {event_href}")
         event = events[0]

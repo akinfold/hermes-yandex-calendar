@@ -43,7 +43,12 @@ class Attendee:
 
 @dataclass
 class Event:
-    """A calendar event. ``href`` is the CalDAV resource path (set by the client)."""
+    """A calendar event.
+
+    ``href`` (the CalDAV resource path) and ``etag`` (the version the server gave
+    that resource) are both filled in by the client when an event is read, and are
+    not part of the iCalendar data.
+    """
 
     uid: str
     summary: str = ""
@@ -56,6 +61,7 @@ class Event:
     attendees: list[Attendee] = field(default_factory=list)
     transp: str = ""  # OPAQUE (busy) / TRANSPARENT (free); "" == unset
     href: str = ""
+    etag: str = ""  # version tag from the server; enables conditional writes
     # Verbatim, already-unfolded content lines for properties we don't model.
     raw_props: list[str] = field(default_factory=list)
 
