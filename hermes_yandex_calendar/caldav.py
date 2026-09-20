@@ -1,7 +1,10 @@
 """A small CalDAV client for Yandex Calendar (https://caldav.yandex.ru).
 
-Speaks just enough CalDAV (RFC 4791) to discover calendars, run a
-time-range ``calendar-query`` REPORT, PUT a new event, and DELETE one.
+Speaks just enough CalDAV (RFC 4791) to discover calendars, run a time-range
+``calendar-query`` REPORT, GET a single event, PUT a new event (``If-None-Match: *``)
+or a modified one (``If-Match`` when its ETag is known), answer an invitation, move an
+event between calendars (verbatim copy, read-back, then a conditional DELETE of the
+original), and DELETE an event.
 Untrusted server XML is parsed with :mod:`defusedxml` (never ``xml.etree``).
 
 No Hermes imports — this is unit-testable with ``httpx.MockTransport``.

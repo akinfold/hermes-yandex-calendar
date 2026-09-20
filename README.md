@@ -19,7 +19,9 @@ your real calendar, over CalDAV, with no third-party service in the middle.
   specific actions (`read`, `read,write`, …). A disallowed action is not in the
   toolset at all.
 - 🛟 **Careful with your data** — recurrence rules, alarms, and properties this
-  plugin does not model survive every edit; an edit that would overwrite someone
+  plugin does not model survive every edit (an edit does rewrite a timed start and
+  end into UTC and drops the resource's `VTIMEZONE`, so a recurring series in a
+  daylight-saving zone shifts by an hour after the changeover); an edit that would overwrite someone
   else's concurrent change is refused; moves copy the resource byte for byte, and
   the original goes only once the copy has been read back from the target *and*
   only if nobody changed it in between.
@@ -63,10 +65,18 @@ Up to seven standalone tools, in the `yandex_calendar` toolset:
 | `yandex_calendar_list_calendars` | List the calendars the plugin can use (name + `href`). |
 | `yandex_calendar_list_events` | List events in a time range (summary, start/end, location, description, attendees, busy status, and an `href`). |
 | `yandex_calendar_create_event` | Create an event (summary, start, optional end/location/description/all-day, attendees, busy status, target calendar). |
-| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free. Recurrence rules and alarms are preserved, and a concurrent change by someone else is refused rather than overwritten. |
+| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free; an empty string clears a text field. Recurrence rules and alarms are preserved, and a concurrent change by someone else is refused rather than overwritten. |
 | `yandex_calendar_respond_event` | Respond to a meeting invitation — accept, decline, or tentatively accept. |
 | `yandex_calendar_move_event` | Move an event to another calendar, contents intact. |
-| `yandex_calendar_delete_event` | Delete an event by `href`. |
+| `yandex_calendar_delete_event` | Delete an event by `href`. Idempotent: an `href` that no longer exists, or never did, is also reported as `deleted: true`. |
+
+**Recurring events are not expanded.** `yandex_calendar_list_events` runs a plain
+time-range query and reports each event as the server stores it. A recurring series
+is listed once, with the `start`/`end` of its *first* occurrence — which can lie well
+before the requested range — and its recurrence rule is not part of the output. A
+series whose individual occurrences were edited comes back as several entries sharing
+one `href`, and `update_event` and `respond_event` refuse such a resource rather than
+drop those occurrences; it can still be moved or deleted as a whole.
 
 Yandex Calendar has no public REST API, so this plugin speaks **CalDAV**
 (`https://caldav.yandex.ru`) directly — the same protocol Yandex's own docs point
@@ -74,13 +84,25 @@ third-party clients at. Nothing is proxied through anyone else's servers.
 
 ### Multiple calendars
 
-Every tool that reads or writes events takes an optional `calendar` argument — a
-calendar **name** (as returned by `yandex_calendar_list_calendars`) or its `href`.
-Omit it to use the default (first) calendar. `update`, `move`, and `delete` identify
-the event by its `href`, which already encodes the calendar it lives in.
+`yandex_calendar_list_events` and `yandex_calendar_create_event` take an optional
+`calendar` argument; `yandex_calendar_move_event` takes a required one, naming the
+destination. A calendar is named by its display **name** (as returned by
+`yandex_calendar_list_calendars`), by the last segment of its path (e.g.
+`events-12345`), or by its full `href` — names and path segments are matched
+case-insensitively. Omit the optional argument to use the default calendar.
+`update`, `respond`, `move`, and `delete` identify the event by its `event_href`,
+which already encodes the calendar it lives in.
 
-Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`; the
-first one in that list becomes the default.
+Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`. The
+default calendar is the first **the server lists** among the allowed ones; the order
+of that setting does not decide it.
+
+Some Yandex calendars — holidays and birthdays, for instance — are read-only, yet they
+are listed like any other and the server answers a write into them with success while
+storing nothing. `yandex_calendar_move_event` catches this, because it reads the copy
+back and leaves the original where it was, but `yandex_calendar_create_event` does not:
+it reports `created: true` and an `href` at which nothing exists. Keep such calendars
+out of reach with `YANDEX_CALENDAR_CALENDARS`.
 
 ## Configuration
 
@@ -89,7 +111,7 @@ first one in that list becomes the default.
 | `YANDEX_CALENDAR_LOGIN` | yes | — | Yandex login / email. |
 | `YANDEX_CALENDAR_APP_PASSWORD` | yes | — | App password for CalDAV — an account password will not work. |
 | `YANDEX_CALENDAR_BASE_URL` | no | `https://caldav.yandex.ru` | HTTPS override for self-hosted / testing. |
-| `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendar names, e.g. `Work,Personal`. The first is the default calendar. |
+| `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendars, e.g. `Work,Personal`. Each entry is a calendar name or the last segment of its `href` (e.g. `events-12345`), matched case-insensitively; a full `href` is not accepted here. An entry that matches nothing is ignored, and if none match, `yandex_calendar_list_calendars` returns an empty list while every other tool fails with `No calendars available matching …`. |
 | `YANDEX_CALENDAR_ACTIONS` | no | *(all)* | Comma-separated allow-list of actions the agent may perform — see below. |
 
 Credentials are read from the environment first, then from `~/.hermes/.env`, so they
@@ -127,10 +149,11 @@ YANDEX_CALENDAR_ACTIONS=read,write
 YANDEX_CALENDAR_ACTIONS=list_events,respond_event
 ```
 
-Leave it unset for all seven tools. A name that matches nothing is ignored, so a
-typo can only ever withhold a tool, never grant one — and a value that names
-nothing recognisable therefore registers nothing at all. The list is applied when
-the plugin loads: restart Hermes after changing it.
+Leave it unset for all seven tools; an empty or whitespace-only value counts as
+unset, so `YANDEX_CALENDAR_ACTIONS=` does **not** mean "no tools". A name that
+matches nothing is ignored, so a typo can only ever withhold a tool, never grant one
+— and a non-blank value that names nothing recognisable therefore registers nothing
+at all. The list is applied when the plugin loads: restart Hermes after changing it.
 
 ### Security boundaries
 
@@ -193,8 +216,17 @@ Hermes discovers it through the `hermes_agent.plugins` entry point; add
 
 ### Option C — drop-in directory
 
-Unzip the release archive into `~/.hermes/plugins/` so you end up with
+Download `hermes-yandex-calendar-plugin-<version>.zip` from the
+[latest release](https://github.com/akinfold/hermes-yandex-calendar/releases/latest)
+— not the wheel, the `.tar.gz`, or GitHub's "Source code" archives — and unzip it
+into `~/.hermes/plugins/` so you end up with
 `~/.hermes/plugins/yandex_calendar/plugin.yaml`, then enable it the same way.
+
+The archive holds the plugin directory alone, with no dependency metadata, so this
+path installs nothing for you. `httpx` and `defusedxml` have to be importable in the
+environment Hermes runs in: Hermes itself depends on `httpx`, but `defusedxml` is not
+a core Hermes dependency, so if the plugin fails to load with `No module named
+'defusedxml'`, run `pip install 'defusedxml>=0.7'` there. Option B installs both.
 
 ## Development
 
@@ -208,9 +240,12 @@ pytest                       # unit tests, no network
 ## Running the live E2E tests
 
 The `e2e`-marked tests hit a real Yandex account and are deselected by default.
-They create, edit, and then delete a throwaway event 400 days out, so a successful
-run leaves nothing behind — but the attendees they invite do receive an invitation,
-so use addresses you own.
+They create, edit, move, and then delete throwaway events 400–402 days out, named
+with the `hermes-e2e` prefix (`YC_E2E_MARKER` overrides it). Most land in the default
+calendar; the move test also drops a short-lived probe event into your other
+calendars, one at a time, until it finds one that accepts it, and then moves an event
+there. Everything is deleted again, so a successful run leaves nothing behind — but
+the attendees they invite do receive an invitation, so use addresses you own.
 
 ### Locally
 
@@ -224,7 +259,9 @@ pytest -m e2e
 `YC_E2E_ATTENDEES` is the comma-separated list of addresses the throwaway event
 invites, and each one really is emailed an invitation — so list mailboxes you own.
 Omit it and the suite falls back to a `+e2e` sub-address of the account itself,
-which lands in your own inbox. Two constraints, both learned the hard way against
+which lands in your own inbox. That fallback needs `YANDEX_CALENDAR_LOGIN` in full
+e-mail form (`you@yandex.ru`); with a bare login there is nothing to derive it from
+and the round-trip test fails asking for `YC_E2E_ATTENDEES`. Two constraints, both learned the hard way against
 the live server:
 
 - **The addresses must exist.** A made-up one (`guest@example.com`) bounces back
@@ -239,18 +276,29 @@ Or keep all three out of the command line, in `~/.yandex-calendar-login`,
 `~/.yandex-calendar-app-password`, and `~/.yandex-calendar-attendees`, and just run
 `pytest -m e2e` — see `tests/e2e/conftest.py`.
 
+The suite builds its client exactly as the plugin does, so every `YANDEX_CALENDAR_*`
+setting it does not find in the environment (or, for the credentials, in those files)
+is looked up in `~/.hermes/.env` — `YANDEX_CALENDAR_BASE_URL` and
+`YANDEX_CALENDAR_CALENDARS` included. On a machine with Hermes already configured,
+`pytest -m e2e` therefore runs against that account instead of skipping.
+
 ### On GitHub Actions
 
 The **E2E (live)** workflow is manual (`workflow_dispatch`). It reads
 `YANDEX_CALENDAR_LOGIN`, `YANDEX_CALENDAR_APP_PASSWORD`, and `YC_E2E_ATTENDEES`
-from a GitHub Environment named `yandex-calendar-e2e`.
+from the **secrets** of a GitHub Environment named `yandex-calendar-e2e`. All three
+must be secrets — the workflow reads nothing from environment variables, so a value
+defined as a variable arrives empty: without the credentials every test is skipped,
+and without `YC_E2E_ATTENDEES` the suite falls back to the `+e2e` sub-address. The
+optional `install_hermes` input also runs `pip install hermes-agent` beforehand, on a
+best-effort basis.
 
 ## Related Hermes plugins
 
 Part of a family of Yandex plugins for Hermes Agent:
 
 - [hermes-yandex-disk](https://github.com/akinfold/hermes-yandex-disk) — browse, read, write, and share files on Yandex Disk (REST API).
-- [hermes-yandex-mail](https://github.com/akinfold/hermes-yandex-mail) — search, read, flag, move, and delete Yandex Mail messages (IMAP).
+- [hermes-yandex-mail](https://github.com/akinfold/hermes-yandex-mail) — search, read, flag, move, and delete Yandex Mail messages over IMAP, and send over SMTP when sending is switched on.
 - [hermes-yandex-search-api](https://github.com/akinfold/hermes-yandex-search-api) — Yandex web search backend and generative, cited answers for Hermes (Yandex Search API).
 
 ## Contributing
