@@ -25,6 +25,8 @@ hermes_yandex_calendar/
   _compat.py    # real-vs-shim host env helper
   tool.py       # tool schemas + handlers (JSON in, JSON string out)
   __init__.py   # register(ctx) — the plugin entry point
+  plugin.yaml   # Hermes manifest: name, version, provides_tools, requires_env
+  py.typed      # PEP 561 marker
 tests/          # unit tests (no network, httpx.MockTransport)
 tests/e2e/      # live tests against a real account, marked `e2e`
 ```

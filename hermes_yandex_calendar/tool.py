@@ -25,8 +25,8 @@ _DATETIME_HINT = (
     "A datetime without an offset is treated as UTC."
 )
 _CALENDAR_HINT = (
-    "Target calendar: its name (as shown by yandex_calendar_list_calendars) or href. "
-    "Omit to use the default (first) calendar."
+    "Target calendar: its name (as shown by yandex_calendar_list_calendars), the last "
+    "segment of its href, or the full href. Omit to use the default calendar."
 )
 # Plain strings only: a union item type ("string" or "object") is rejected by
 # strict function-calling validators. Handlers still accept objects if a model
@@ -53,7 +53,11 @@ LIST_SCHEMA: dict[str, Any] = {
     "description": (
         "List events from the user's Yandex Calendar within a time range. "
         "Returns each event's summary, start/end, location, description, attendees, "
-        "busy status, and href (the href is needed to update or delete an event)."
+        "busy status, and href (the href is needed to update or delete an event). "
+        "Recurring events are not expanded: a series is returned as stored, with the "
+        "start/end of its first occurrence (possibly before the requested range) and "
+        "without its recurrence rule, and a series with modified occurrences appears "
+        "as several entries sharing one href."
     ),
     "parameters": {
         "type": "object",
@@ -108,18 +112,36 @@ UPDATE_SCHEMA: dict[str, Any] = {
         "Update an existing event (identified by its href from "
         "yandex_calendar_list_events). Only the fields you provide are changed; "
         "attendees are added/removed incrementally and unrelated properties "
-        "(recurrence, alarms) are preserved."
+        "(recurrence, alarms) are preserved. A recurring event whose individual "
+        "occurrences were modified is refused; it can only be moved or deleted as a whole."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "event_href": {"type": "string", "description": "The event resource href to update."},
-            "summary": {"type": "string", "description": "New title."},
+            "summary": {
+                "type": "string",
+                "description": "New title. An empty string clears it.",
+            },
             "start": {"type": "string", "description": f"New start ({_DATETIME_HINT})."},
             "end": {"type": "string", "description": f"New end ({_DATETIME_HINT})."},
-            "location": {"type": "string", "description": "New location."},
-            "description": {"type": "string", "description": "New description / notes."},
-            "all_day": {"type": "boolean", "description": "Mark as an all-day event."},
+            "location": {
+                "type": "string",
+                "description": "New location. An empty string clears it.",
+            },
+            "description": {
+                "type": "string",
+                "description": "New description / notes. An empty string clears it.",
+            },
+            "all_day": {
+                "type": "boolean",
+                "description": (
+                    "Whether the event is all-day. While it is all-day only the date part of "
+                    "start/end is stored, so a datetime sent without all_day=false loses its "
+                    "time. To turn an all-day event into a timed one, pass all_day=false "
+                    "together with a datetime start and a datetime end."
+                ),
+            },
             "busy": {
                 "type": "boolean",
                 "description": "Change busy status: true = busy, false = free.",
@@ -143,7 +165,8 @@ RESPOND_SCHEMA: dict[str, Any] = {
     "name": "yandex_calendar_respond_event",
     "description": (
         "Respond to a meeting invitation: accept, decline, or tentatively accept it. "
-        "Sets the account owner's participation status on the event identified by its href."
+        "Sets the account owner's participation status on the event identified by its href. "
+        "A recurring event whose individual occurrences were modified is refused."
     ),
     "parameters": {
         "type": "object",
@@ -185,7 +208,8 @@ DELETE_SCHEMA: dict[str, Any] = {
     "description": (
         "Delete an event from the user's Yandex Calendar by its href "
         "(obtain the href from yandex_calendar_list_events). The href identifies "
-        "both the event and the calendar it lives in."
+        "both the event and the calendar it lives in. Deleting is idempotent: an href "
+        "that no longer exists is reported as deleted rather than as an error."
     ),
     "parameters": {
         "type": "object",

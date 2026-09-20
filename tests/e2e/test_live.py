@@ -4,8 +4,8 @@ Deselected by default (``addopts = -m 'not e2e'``). Run explicitly with::
 
     YANDEX_CALENDAR_LOGIN=... YANDEX_CALENDAR_APP_PASSWORD=... pytest -m e2e
 
-They create and then delete a throwaway event, so they leave no residue on a
-successful run. Skipped automatically when credentials are absent.
+They create, edit, move and then delete throwaway events, so they leave no residue
+on a successful run. Skipped automatically when credentials are absent.
 
 Optional overrides: ``YC_E2E_MARKER`` (event summary prefix) and
 ``YC_E2E_ATTENDEES`` (comma-separated addresses invited to the throwaway event —
