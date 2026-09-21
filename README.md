@@ -34,7 +34,7 @@ Tested against Hermes **0.19.x**, Python **3.11–3.13**.
 
 ```bash
 # 1. Install into Hermes (alternatively: pip install hermes-yandex-calendar)
-hermes plugins install akinfold/hermes-yandex-calendar --enable
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable
 
 # 2. Add your credentials — the app password comes from
 #    https://id.yandex.ru/security/app-passwords (scope: "Calendar (CalDAV)")
@@ -202,8 +202,23 @@ If a tool answers *"Authentication failed"*, this is almost always the cause.
 ### Option A — from Git (recommended)
 
 ```bash
-hermes plugins install akinfold/hermes-yandex-calendar --enable
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable
 ```
+
+Note the `/hermes_yandex_calendar` at the end. The plugin lives in that directory,
+not at the repository root, and Hermes reads the manifest from whatever you point
+it at. Name the directory and the install is a plugin: Hermes prompts for
+`YANDEX_CALENDAR_LOGIN` and `YANDEX_CALENDAR_APP_PASSWORD`, installs under the
+manifest name `yandex_calendar`, and `--enable` enables that name. It also scans
+only that directory, so the tests and workflows in this repository stay out of the
+security report.
+
+Point it at the repository root instead and the install still appears to succeed,
+but it copies a directory with no manifest and no `register(ctx)` in it: Hermes
+warns that it "may not be a valid Hermes plugin", asks for nothing, and enables the
+repository name, which nothing answers to. If you installed that way, remove
+`~/.hermes/plugins/hermes-yandex-calendar` and install again with the directory
+named.
 
 ### Option B — pip
 
