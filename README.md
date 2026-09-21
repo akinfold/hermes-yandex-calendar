@@ -97,9 +97,15 @@ case-insensitively. Omit the optional argument to use the default calendar.
 `update`, `respond`, `move`, and `delete` identify the event by its `event_href`,
 which already encodes the calendar it lives in.
 
-Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`. The
-default calendar is the first **the server lists** among the allowed ones; the order
-of that setting does not decide it.
+Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`, and
+put the one you want as the default first: that order is what
+`yandex_calendar_list_calendars` reports and what an unqualified write follows.
+Without the setting, the order the server returns stands.
+
+> **Changed in 0.5.0.** Until then the order of that setting was ignored and the
+> default was whichever allowed calendar the server happened to list first. If you
+> set `YANDEX_CALENDAR_CALENDARS` and relied on that, check which calendar is first
+> in your value before upgrading — it is the one events will go to now.
 
 Some Yandex calendars — holidays and birthdays, for instance — are read-only, yet they
 are listed like any other and the server answers a write into them with success while

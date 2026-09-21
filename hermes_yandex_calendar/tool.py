@@ -43,7 +43,8 @@ LIST_CALENDARS_SCHEMA: dict[str, Any] = {
     "name": "yandex_calendar_list_calendars",
     "description": (
         "List the Yandex calendars this plugin can use (name + href). Use a returned "
-        "name or href as the 'calendar' argument of the other tools."
+        "name or href as the 'calendar' argument of the other tools. The first one "
+        "listed is the default: it is where an event goes when no calendar is named."
     ),
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
