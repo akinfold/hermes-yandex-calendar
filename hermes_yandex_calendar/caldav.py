@@ -394,8 +394,9 @@ class YandexCalDAVClient:
     def _match_keys(self, cal: Calendar) -> set[str]:
         """The spellings the allow-list may use for this calendar, lower-cased."""
         keys = set()
-        if cal.display_name:
-            keys.add(cal.display_name.strip().lower())
+        name = (cal.display_name or "").strip().lower()
+        if name:
+            keys.add(name)
         seg = [p for p in cal.href.split("/") if p]
         if seg:
             keys.add(seg[-1].strip().lower())
@@ -405,7 +406,13 @@ class YandexCalDAVClient:
         return bool(self._match_keys(cal) & self._allowed)
 
     def _allow_list_position(self, cal: Calendar) -> int:
-        """Where this calendar sits in the allow-list; last if nothing matches."""
+        """Where this calendar sits in the allow-list.
+
+        The final ``return`` is defensive and unreachable today: the only
+        caller filters with :meth:`_calendar_allowed` first, which asks the
+        same keys of the same set. It is kept so that sorting an unfiltered
+        list degrades to "unknown calendars last" instead of raising.
+        """
         keys = self._match_keys(cal)
         for index, entry in enumerate(self._allowed_order):
             if entry in keys:
@@ -415,9 +422,11 @@ class YandexCalDAVClient:
     def resolve_calendar_href(self, ref: str | None = None) -> str:
         """Resolve a calendar name / last-path-segment / href to a usable href.
 
-        ``None`` selects the default calendar (the first allowed one). An explicit
-        ``ref`` must match an allowed calendar, otherwise a ``CalDAVError`` naming
-        the available calendars is raised.
+        ``None`` selects the default calendar: the first entry of
+        :meth:`list_calendars`, which is the first calendar named by the
+        allow-list when there is one, and the server's first otherwise. An
+        explicit ``ref`` must match an allowed calendar, otherwise a
+        ``CalDAVError`` naming the available calendars is raised.
         """
         direct = self._href_without_discovery(ref)
         if direct is not None:

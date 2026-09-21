@@ -43,6 +43,31 @@ END:VCALENDAR</c:calendar-data></d:prop>
 </d:multistatus>"""
 
 
+SAME_NAME_CALENDARS = """<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-10/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Shared</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-11/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Shared</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-12/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Work</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
 TWO_CALENDARS = """<?xml version="1.0" encoding="utf-8"?>
 <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
   <d:response>
@@ -456,6 +481,34 @@ def test_a_repeated_entry_claims_only_its_first_position():
     client = make_client(
         lambda r: httpx.Response(207, text=TWO_CALENDARS),
         allowed=["Personal", "Work", "Personal"],
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
+
+
+def test_calendars_matching_one_entry_keep_the_order_the_server_gave_them():
+    """The sort is stable, and that is load-bearing, not incidental.
+
+    Two calendars share the name the allow-list names. Nothing in the setting
+    can separate them, so the server's order has to survive between them —
+    otherwise which of the two an unqualified write lands in would depend on
+    an implementation detail of the sort.
+    """
+    client = make_client(
+        lambda r: httpx.Response(207, text=SAME_NAME_CALENDARS), allowed=["Shared", "Work"]
+    )
+    cals = client.list_calendars()
+    assert [c.display_name for c in cals] == ["Shared", "Shared", "Work"]
+    assert [c.href for c in cals[:2]] == [
+        "/calendars/user@yandex.ru/events-10/",
+        "/calendars/user@yandex.ru/events-11/",
+    ]
+    assert client.resolve_calendar_href(None) == "/calendars/user@yandex.ru/events-10/"
+
+
+def test_one_calendar_matched_by_two_entries_takes_the_earlier_position():
+    """Named by segment first and by name later: the earlier entry decides."""
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["events-99", "Work", "Personal"]
     )
     assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
 
