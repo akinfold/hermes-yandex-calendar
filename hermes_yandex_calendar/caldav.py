@@ -226,7 +226,13 @@ class YandexCalDAVClient:
         self._base_path = _canonical_path(base.path).rstrip("/")
         self._origin_url = urlunsplit((base.scheme, base.netloc, "", "", ""))
         self._allowed_raw = list(allowed_calendars or [])
-        self._allowed = {c.strip().lower() for c in self._allowed_raw if c.strip()}
+        # Order is part of the setting, not decoration: the first entry that
+        # matches something is the default calendar. Kept as a list, deduped,
+        # so a repeated name cannot claim two positions.
+        self._allowed_order = list(
+            dict.fromkeys(c.strip().lower() for c in self._allowed_raw if c.strip())
+        )
+        self._allowed = set(self._allowed_order)
         self._owns_client = client is None
         self._client = client or httpx.Client(
             auth=httpx.BasicAuth(login, password),
@@ -369,28 +375,58 @@ class YandexCalDAVClient:
         return [cal for cal in parsed if cal is not None]
 
     def list_calendars(self) -> list[Calendar]:
-        """Calendars this client may use — all discovered, filtered by the allow-list."""
+        """Calendars this client may use, in the order the allow-list names them.
+
+        Without an allow-list the server's own order stands. With one, the
+        configured order wins, because the first calendar listed is the one
+        writes go to when the caller names none — and the order of that setting
+        is the only say the operator has over which calendar that is. The sort
+        is stable, so calendars matching the same entry keep the server's order
+        between them.
+        """
         if self._calendars is None:
             self._calendars = self.discover_calendars()
         if not self._allowed:
             return list(self._calendars)
-        return [c for c in self._calendars if self._calendar_allowed(c)]
+        allowed = [c for c in self._calendars if self._calendar_allowed(c)]
+        return sorted(allowed, key=self._allow_list_position)
 
-    def _calendar_allowed(self, cal: Calendar) -> bool:
+    def _match_keys(self, cal: Calendar) -> set[str]:
+        """The spellings the allow-list may use for this calendar, lower-cased."""
         keys = set()
-        if cal.display_name:
-            keys.add(cal.display_name.strip().lower())
+        name = (cal.display_name or "").strip().lower()
+        if name:
+            keys.add(name)
         seg = [p for p in cal.href.split("/") if p]
         if seg:
             keys.add(seg[-1].strip().lower())
-        return bool(keys & self._allowed)
+        return keys
+
+    def _calendar_allowed(self, cal: Calendar) -> bool:
+        return bool(self._match_keys(cal) & self._allowed)
+
+    def _allow_list_position(self, cal: Calendar) -> int:
+        """Where this calendar sits in the allow-list.
+
+        The final ``return`` is defensive and unreachable today: the only
+        caller filters with :meth:`_calendar_allowed` first, which asks the
+        same keys of the same set. It is kept so that sorting an unfiltered
+        list degrades to "unknown calendars last" instead of raising.
+        """
+        keys = self._match_keys(cal)
+        for index, entry in enumerate(self._allowed_order):
+            if entry in keys:
+                return index
+        return len(self._allowed_order)
 
     def resolve_calendar_href(self, ref: str | None = None) -> str:
         """Resolve a calendar name / last-path-segment / href to a usable href.
 
-        ``None`` selects the default calendar (the first allowed one). An explicit
-        ``ref`` must match an allowed calendar, otherwise a ``CalDAVError`` naming
-        the available calendars is raised.
+        ``None`` selects the default calendar: the first entry of
+        :meth:`list_calendars`, which is the first calendar named by the
+        allow-list when there is one, and the server's first otherwise. An
+        explicit ``ref`` must match an allowed calendar, otherwise a
+        ``CalDAVError`` naming the available calendars is raised.
         """
         direct = self._href_without_discovery(ref)
         if direct is not None:

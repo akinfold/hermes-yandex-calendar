@@ -61,7 +61,12 @@ __all__ = [
 
 
 def allowed_calendars() -> list[str]:
-    """The comma-separated allow-list of calendar names, or ``[]`` for all."""
+    """The allow-list of calendars from the environment, or ``[]`` for all.
+
+    Order is preserved on purpose and is part of the contract: the first entry
+    that matches a calendar names the default one. Never sort this, and never
+    put it through a set.
+    """
     raw = get_provider_env(ENV_CALENDARS)
     return [c.strip() for c in raw.split(",") if c.strip()]
 

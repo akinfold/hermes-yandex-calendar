@@ -97,9 +97,17 @@ case-insensitively. Omit the optional argument to use the default calendar.
 `update`, `respond`, `move`, and `delete` identify the event by its `event_href`,
 which already encodes the calendar it lives in.
 
-Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`. The
-default calendar is the first **the server lists** among the allowed ones; the order
-of that setting does not decide it.
+Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`, and
+put the one you want as the default first: that order is what
+`yandex_calendar_list_calendars` reports and what an unqualified write follows.
+Without the setting, the order the server returns stands.
+
+> **Changed in 0.5.0.** Until then the order of that setting was ignored and the
+> default was whichever allowed calendar the server happened to list first. If you
+> set `YANDEX_CALENDAR_CALENDARS` and relied on that, check which calendar your value
+> names first before upgrading — it is the one events will go to now. An entry that
+> matches nothing is skipped, so a typo in first position hands the default to the
+> next entry that does match.
 
 Some Yandex calendars — holidays and birthdays, for instance — are read-only, yet they
 are listed like any other and the server answers a write into them with success while
@@ -115,7 +123,7 @@ out of reach with `YANDEX_CALENDAR_CALENDARS`.
 | `YANDEX_CALENDAR_LOGIN` | yes | — | Yandex login / email. |
 | `YANDEX_CALENDAR_APP_PASSWORD` | yes | — | App password for CalDAV — an account password will not work. |
 | `YANDEX_CALENDAR_BASE_URL` | no | `https://caldav.yandex.ru` | HTTPS override for self-hosted / testing. |
-| `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendars, e.g. `Work,Personal`. Each entry is a calendar name or the last segment of its `href` (e.g. `events-12345`), matched case-insensitively; a full `href` is not accepted here. An entry that matches nothing is ignored, and if none match, `yandex_calendar_list_calendars` returns an empty list while every other tool fails with `No calendars available matching …`. |
+| `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendars, e.g. `Work,Personal`. **The order matters: the first entry that matches a calendar makes it the default**, the one an unqualified create or list uses, and the listing follows the same order. Each entry is a calendar name or the last segment of its `href` (e.g. `events-12345`), matched case-insensitively; a full `href` is not accepted here. An entry that matches nothing is ignored and claims no position, and if none match, `yandex_calendar_list_calendars` returns an empty list while every other tool fails with `No calendars available matching …`. |
 | `YANDEX_CALENDAR_ACTIONS` | no | *(all)* | Comma-separated allow-list of actions the agent may perform — see below. |
 
 Credentials are read from the environment first, then from `~/.hermes/.env`, so they

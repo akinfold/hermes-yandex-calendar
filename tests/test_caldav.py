@@ -43,6 +43,31 @@ END:VCALENDAR</c:calendar-data></d:prop>
 </d:multistatus>"""
 
 
+SAME_NAME_CALENDARS = """<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-10/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Shared</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-11/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Shared</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/calendars/user@yandex.ru/events-12/</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      <d:displayname>Work</d:displayname>
+    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
 TWO_CALENDARS = """<?xml version="1.0" encoding="utf-8"?>
 <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
   <d:response>
@@ -411,6 +436,87 @@ def test_resolve_calendar_by_name():
     assert client.resolve_calendar_href("personal") == "/calendars/user@yandex.ru/events-99/"
     # last path segment also resolves
     assert client.resolve_calendar_href("events-42") == "/calendars/user@yandex.ru/events-42/"
+
+
+def test_the_allow_list_decides_the_order_and_so_the_default():
+    """The server lists Work first; naming Personal first must move it there.
+
+    The order of YANDEX_CALENDAR_CALENDARS is the only say an operator has over
+    which calendar an unqualified write lands in, so it has to outrank the
+    order discovery happens to return.
+    """
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["Personal", "Work"]
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
+    assert client.resolve_calendar_href(None) == "/calendars/user@yandex.ru/events-99/"
+
+
+def test_the_allow_list_order_is_followed_the_other_way_round_too():
+    """The same fixture, the other order: nothing is hard-coded about Personal."""
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["Work", "Personal"]
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Work", "Personal"]
+    assert client.resolve_calendar_href(None) == "/calendars/user@yandex.ru/events-42/"
+
+
+def test_a_path_segment_claims_its_place_in_the_order_like_a_name():
+    """An entry may spell a calendar by its last path segment; it still counts."""
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["events-99", "Work"]
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
+
+
+def test_entries_that_match_nothing_do_not_take_a_position():
+    """A typo withholds nothing and must not push a real calendar down."""
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["Nope", "Personal", "Work"]
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
+
+
+def test_a_repeated_entry_claims_only_its_first_position():
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS),
+        allowed=["Personal", "Work", "Personal"],
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
+
+
+def test_calendars_matching_one_entry_keep_the_order_the_server_gave_them():
+    """The sort is stable, and that is load-bearing, not incidental.
+
+    Two calendars share the name the allow-list names. Nothing in the setting
+    can separate them, so the server's order has to survive between them —
+    otherwise which of the two an unqualified write lands in would depend on
+    an implementation detail of the sort.
+    """
+    client = make_client(
+        lambda r: httpx.Response(207, text=SAME_NAME_CALENDARS), allowed=["Shared", "Work"]
+    )
+    cals = client.list_calendars()
+    assert [c.display_name for c in cals] == ["Shared", "Shared", "Work"]
+    assert [c.href for c in cals[:2]] == [
+        "/calendars/user@yandex.ru/events-10/",
+        "/calendars/user@yandex.ru/events-11/",
+    ]
+    assert client.resolve_calendar_href(None) == "/calendars/user@yandex.ru/events-10/"
+
+
+def test_one_calendar_matched_by_two_entries_takes_the_earlier_position():
+    """Named by segment first and by name later: the earlier entry decides."""
+    client = make_client(
+        lambda r: httpx.Response(207, text=TWO_CALENDARS), allowed=["events-99", "Work", "Personal"]
+    )
+    assert [c.display_name for c in client.list_calendars()] == ["Personal", "Work"]
+
+
+def test_without_an_allow_list_the_server_order_stands():
+    """Nothing reorders an account that configured no allow-list."""
+    client = make_client(lambda r: httpx.Response(207, text=TWO_CALENDARS))
+    assert [c.display_name for c in client.list_calendars()] == ["Work", "Personal"]
 
 
 def test_resolve_default_is_first():
