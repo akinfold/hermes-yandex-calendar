@@ -43,12 +43,16 @@ hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --
 chmod 600 ~/.hermes/.env
 ```
 
-Then enable it in `~/.hermes/config.yaml` (third-party plugins are off by default):
+`--enable` writes the plugin's manifest name into `~/.hermes/config.yaml` for
+you, so there is nothing else to switch on:
 
 ```yaml
 plugins:
   enabled: [yandex_calendar]
 ```
+
+Installing with `pip` instead leaves that to you: third-party plugins are off
+until they are listed there.
 
 That's it. Ask the agent *"what do I have tomorrow?"* and it will tell you.
 

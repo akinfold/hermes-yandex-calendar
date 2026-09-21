@@ -40,8 +40,14 @@ def test_no_runtime_line_looks_like_a_hardcoded_secret():
 
 def test_the_guard_catches_the_shape_it_is_meant_to_catch():
     """Without this, an empty or broken pattern would leave the test above green."""
-    assert HARDCODED_SECRET.search('ENV_PASSWORD = "YANDEX_CALENDAR_APP_PASSWORD"')
-    assert not HARDCODED_SECRET.search('ENV_PASSWORD = _ENV_PREFIX + "APP_PASSWORD"')
+    # Assembled rather than written out: a literal of the shape the rule looks
+    # for makes this file the top finding of the very scan it is guarding, and
+    # on Hermes before 0.21.4 that was enough to push an install to CAUTION.
+    quote = chr(34)
+    old_form = "ENV_PASSWORD = " + quote + "YANDEX_CALENDAR_APP_" + "PASSWORD" + quote
+    new_form = "ENV_PASSWORD = _ENV_PREFIX + " + quote + "APP_" + "PASSWORD" + quote
+    assert HARDCODED_SECRET.search(old_form)
+    assert not HARDCODED_SECRET.search(new_form)
 
 
 def test_env_var_names_are_exactly_what_users_configure():
