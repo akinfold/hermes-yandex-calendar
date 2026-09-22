@@ -113,7 +113,13 @@ UPDATE_SCHEMA: dict[str, Any] = {
         "Update an existing event (identified by its href from "
         "yandex_calendar_list_events). Only the fields you provide are changed; "
         "attendees are added/removed incrementally and unrelated properties "
-        "(recurrence, alarms) are preserved. A recurring event whose individual "
+        "(recurrence, alarms, time zone definitions) are preserved. A start or end "
+        "you do not pass keeps the exact local time and time zone it is stored with, "
+        "so editing anything else cannot move the event; one you do pass is written "
+        "in that same zone, so rescheduling a recurring event does not re-anchor it "
+        "to UTC. Give a time with an offset, or in UTC, and it is converted into the "
+        "event's zone; a time without one is read as UTC, as everywhere else in this "
+        "plugin. A recurring event whose individual "
         "occurrences were modified is refused; it can only be moved or deleted as a whole."
     ),
     "parameters": {

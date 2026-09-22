@@ -19,12 +19,15 @@ your real calendar, over CalDAV, with no third-party service in the middle.
   specific actions (`read`, `read,write`, …). A disallowed action is not in the
   toolset at all.
 - 🛟 **Careful with your data** — recurrence rules, alarms, and properties this
-  plugin does not model survive every edit (an edit does rewrite a timed start and
-  end into UTC and drops the resource's `VTIMEZONE`, so a recurring series in a
-  daylight-saving zone shifts by an hour after the changeover); an edit that would overwrite someone
-  else's concurrent change is refused; moves copy the resource byte for byte, and
-  the original goes only once the copy has been read back from the target *and*
-  only if nobody changed it in between.
+  plugin does not model survive every edit, and so does the time zone: a start or
+  end you leave alone is written back as the exact line it was stored as, and one
+  you do change is written in the same zone the event was already anchored to. A
+  weekly standup at 10:00 Berlin stays 10:00 Berlin whether you rename it or move
+  it to 11:00, instead of being flattened to a fixed UTC instant that drifts an
+  hour at the next changeover. An edit that would overwrite someone else's
+  concurrent change is refused; moves copy the resource byte for byte, and the
+  original goes only once the copy has been read back from the target *and* only
+  if nobody changed it in between.
 - 🔑 **App password, not your account password** — scoped to CalDAV, revocable in
   one click.
 
@@ -69,7 +72,7 @@ Up to seven standalone tools, in the `yandex_calendar` toolset:
 | `yandex_calendar_list_calendars` | List the calendars the plugin can use (name + `href`). |
 | `yandex_calendar_list_events` | List events in a time range (summary, start/end, location, description, attendees, busy status, and an `href`). |
 | `yandex_calendar_create_event` | Create an event (summary, start, optional end/location/description/all-day, attendees, busy status, target calendar). |
-| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free; an empty string clears a text field. Recurrence rules and alarms are preserved, and a concurrent change by someone else is refused rather than overwritten. |
+| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free; an empty string clears a text field. Recurrence rules, alarms, and the time zone of a start or end you leave alone are preserved, and a concurrent change by someone else is refused rather than overwritten. |
 | `yandex_calendar_respond_event` | Respond to a meeting invitation — accept, decline, or tentatively accept. |
 | `yandex_calendar_move_event` | Move an event to another calendar, contents intact. |
 | `yandex_calendar_delete_event` | Delete an event by `href`. Idempotent: an `href` that no longer exists, or never did, is also reported as `deleted: true`. |

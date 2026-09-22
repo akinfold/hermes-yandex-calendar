@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import os
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -219,3 +220,132 @@ def test_move_between_calendars():
             assert client.get_event(created.href) is None  # the original is gone
         finally:
             client.delete_event((moved or created).href)
+
+
+def _unfolded(text: str) -> list[str]:
+    """Undo RFC 5545 folding so a line can be matched as one string.
+
+    The server is free to fold where it likes, so comparing raw text would fail
+    for reasons that have nothing to do with what is being tested.
+    """
+    out: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line[:1] in (" ", "\t") and out:
+            out[-1] += line[1:]
+        else:
+            out.append(line)
+    return out
+
+
+def _server_copy(client, href: str) -> list[str]:
+    """The resource as the SERVER holds it, unfolded, without going through our parser.
+
+    Reading it back with ``get_event`` would prove nothing here: our parser
+    resolves a TZID into an instant, so a server that had normalised the event
+    into UTC would still hand back the right moment and the test would pass.
+    """
+    document = client._fetch_document(href)  # private on purpose: the raw text is the point
+    assert document is not None, "the event vanished from the server"
+    return _unfolded(document[0])
+
+
+def _dtstart(lines: list[str]) -> str:
+    return next(line for line in lines if line.upper().startswith("DTSTART"))
+
+
+def _assert_still_zoned(lines: list[str], tzid: str, local: str) -> None:
+    """The three things that say the zone survived the round trip."""
+    assert any(line.upper().startswith("BEGIN:VTIMEZONE") for line in lines), (
+        "the server dropped the VTIMEZONE component"
+    )
+    assert f"TZID:{tzid}" in lines, f"the server did not keep the {tzid} definition"
+    dtstart = _dtstart(lines)
+    assert f"TZID={tzid}" in dtstart, f"DTSTART lost its zone: {dtstart}"
+    assert dtstart.endswith(local), f"DTSTART is not the local time we wrote: {dtstart}"
+    # The one that catches a server normalising to UTC: the instant would still
+    # be right, so every positive check above could pass while the anchoring —
+    # the whole point — was gone.
+    assert not dtstart.rstrip().endswith("Z"), f"the server normalised DTSTART to UTC: {dtstart}"
+
+
+@requires_creds
+def test_a_zoned_recurring_event_keeps_its_zone_on_the_server():
+    """Does Yandex store a local time with its zone, and keep it across an edit?
+
+    Everything else in this suite reads events back through our own parser, which
+    hides exactly the failure that matters. This one compares what the server
+    holds. The event is a weekly series anchored to Europe/Berlin and starting
+    before the spring changeover: if the zone is lost anywhere along the way, the
+    stored series silently moves an hour from late March onwards.
+    """
+    marker = os.environ.get("YC_E2E_MARKER", "hermes-e2e")
+    tzid = "Europe/Berlin"
+    local = "20260302T100000"
+    body = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//hermes-yandex-calendar//e2e//EN\r\n"
+        f"BEGIN:VTIMEZONE\r\nTZID:{tzid}\r\n"
+        "BEGIN:STANDARD\r\nDTSTART:19701025T030000\r\n"
+        "TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n"
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\nEND:STANDARD\r\n"
+        "BEGIN:DAYLIGHT\r\nDTSTART:19700329T020000\r\n"
+        "TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n"
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\nEND:DAYLIGHT\r\n"
+        "END:VTIMEZONE\r\n"
+        "BEGIN:VEVENT\r\n"
+        f"UID:{marker}-zoned\r\n"
+        f"SUMMARY:{marker} zoned series\r\n"
+        "DESCRIPTION:Created by hermes-yandex-calendar e2e; safe to delete.\r\n"
+        f"DTSTART;TZID={tzid}:{local}\r\n"
+        f"DTEND;TZID={tzid}:20260302T103000\r\n"
+        "RRULE:FREQ=WEEKLY;BYDAY=MO\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    with build_client() as client:
+        collection = client.resolve_calendar_href(None).rstrip("/") + "/"
+        href = f"{collection}{marker}-zoned.ics"
+        resp = client._request(  # private: we write a document we control byte for byte
+            "PUT",
+            href,
+            content=body,
+            headers={"Content-Type": "text/calendar; charset=utf-8"},
+        )
+        assert resp.status_code in (200, 201, 204), f"PUT failed: HTTP {resp.status_code}"
+        try:
+            # 1. What the server made of what we wrote.
+            _assert_still_zoned(_server_copy(client, href), tzid, local)
+
+            # 2. An edit that does not touch the time must not move the event.
+            fetched = client.get_event(href)
+            assert fetched is not None
+            fetched.summary = f"{marker} zoned series (renamed)"
+            client.update_event(fetched, href)
+            renamed = _server_copy(client, href)
+            _assert_still_zoned(renamed, tzid, local)
+            assert any("RRULE:FREQ=WEEKLY" in line.upper() for line in renamed)
+
+            # 3. Rescheduling must keep the anchoring, only the value may move.
+            fetched = client.get_event(href)
+            assert fetched is not None
+            fetched.start = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)  # 11:00 in Berlin
+            client.update_event(fetched, href)
+            moved = _server_copy(client, href)
+            _assert_still_zoned(moved, tzid, "20260302T110000")
+        finally:
+            _erase(client, href)
+
+
+def _erase(client, href: str) -> None:
+    """Delete by href and confirm it is gone, retrying: the server is eventual.
+
+    Deleting by href rather than by searching avoids waiting for an index to
+    catch up, and the retry covers a DELETE the server accepts but has not yet
+    applied to what a GET returns.
+    """
+    client.delete_event(href)
+    for _ in range(10):
+        if client._fetch_document(href) is None:
+            return
+        time.sleep(1)
+    raise AssertionError(f"the throwaway event survived deletion: {href}")
