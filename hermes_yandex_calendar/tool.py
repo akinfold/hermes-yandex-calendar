@@ -87,7 +87,10 @@ CREATE_SCHEMA: dict[str, Any] = {
             "start": {"type": "string", "description": f"Event start ({_DATETIME_HINT})."},
             "end": {
                 "type": "string",
-                "description": f"Event end ({_DATETIME_HINT}). Defaults to 1 hour after start.",
+                "description": (
+                    f"Event end ({_DATETIME_HINT}). Defaults to 1 hour after the start, and "
+                    "must be after it; use a date for both ends of an all-day event."
+                ),
             },
             "location": {"type": "string", "description": "Optional location."},
             "description": {"type": "string", "description": "Optional description / notes."},
@@ -131,7 +134,13 @@ UPDATE_SCHEMA: dict[str, Any] = {
                 "description": "New title. An empty string clears it.",
             },
             "start": {"type": "string", "description": f"New start ({_DATETIME_HINT})."},
-            "end": {"type": "string", "description": f"New end ({_DATETIME_HINT})."},
+            "end": {
+                "type": "string",
+                "description": (
+                    f"New end ({_DATETIME_HINT}). Must be after the start, and the same "
+                    "kind of value as it — moving a start past an unchanged end is refused."
+                ),
+            },
             "location": {
                 "type": "string",
                 "description": "New location. An empty string clears it.",
@@ -400,8 +409,63 @@ def _span_for_create(args: dict[str, Any]) -> tuple[datetime | date, datetime | 
     return start, start + timedelta(hours=1), all_day
 
 
+def _as_date(value: datetime | date) -> date:
+    """The calendar day a value falls on, for comparing an all-day span."""
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _check_span(start: datetime | date | None, end: datetime | date | None, all_day: bool) -> None:
+    """Refuse a span that does not run forwards, before it reaches the server.
+
+    The server answers one with a bare HTTP 400, which reaches the caller as a
+    status code and nothing else, after a round trip. Saying it here costs
+    nothing and names both values.
+    """
+    if start is None or end is None:
+        return
+    if all_day or not (isinstance(start, datetime) or isinstance(end, datetime)):
+        _check_day_span(start, end)
+    else:
+        _check_time_span(start, end)
+
+
+def _check_day_span(start: datetime | date, end: datetime | date) -> None:
+    """DTEND is exclusive for a whole-day event: the day after the last one."""
+    if _as_date(end) <= _as_date(start):
+        raise ValueError(
+            f"An all-day event must end on a later day than it starts: "
+            f"start {_as_date(start).isoformat()}, end {_as_date(end).isoformat()}. "
+            "The end is the day after the last one the event covers."
+        )
+
+
+def _check_time_span(start: datetime | date, end: datetime | date) -> None:
+    """A timed span, where both ends must be the same kind of value.
+
+    RFC 5545 requires that, and a bare date cannot honestly be placed on a
+    clock, so a mixed pair is refused rather than guessed at. One floating end
+    against one anchored end is not comparable either; that one is left to the
+    server rather than resolved by assuming a zone.
+    """
+    if isinstance(start, datetime) != isinstance(end, datetime):
+        kinds = (
+            "a date-time" if isinstance(start, datetime) else "a date",
+            "a date-time" if isinstance(end, datetime) else "a date",
+        )
+        raise ValueError(
+            f"'start' and 'end' must be the same kind of value: got {kinds[0]} "
+            f"({start.isoformat()}) and {kinds[1]} ({end.isoformat()}). Use a date for "
+            "both ends of an all-day event, or a date-time for both of a timed one."
+        )
+    if (start.tzinfo is None) == (end.tzinfo is None) and end <= start:
+        raise ValueError(
+            f"An event must end after it starts: start {start.isoformat()}, end {end.isoformat()}."
+        )
+
+
 def _event_from_create_args(args: dict[str, Any]) -> Event:
     start, end, all_day = _span_for_create(args)
+    _check_span(start, end, all_day)
     return Event(
         uid="",
         summary=(args.get("summary") or "").strip(),
@@ -468,8 +532,26 @@ def _apply_field_updates(event: Event, args: dict[str, Any]) -> None:
         event.start = _parse_dt(args["start"])
     if args.get("end"):
         event.end = _parse_dt(args["end"])
+    _widen_all_day(event)
     if "busy" in args:
         event.transp = _transp_for(args["busy"])
+
+
+def _widen_all_day(event: Event) -> None:
+    """Give a newly all-day event an end that is the day after its last one.
+
+    Turning a timed event into an all-day one keeps only the date part of each
+    end, so a meeting that ran 10:00 to 10:30 would come out starting and
+    ending on the same day. DTEND is exclusive for a whole-day event, so that
+    is a zero-length day: the RFC forbids it and a server may refuse it. The
+    request itself is perfectly reasonable, so widen it to one day rather than
+    reject it.
+    """
+    if not event.all_day or event.start is None:
+        return
+    start = _as_date(event.start)
+    if event.end is None or _as_date(event.end) <= start:
+        event.end = start + timedelta(days=1)
 
 
 def _apply_attendee_updates(event: Event, args: dict[str, Any]) -> None:
@@ -486,6 +568,7 @@ def _apply_attendee_updates(event: Event, args: dict[str, Any]) -> None:
 def _apply_updates(event: Event, args: dict[str, Any]) -> None:
     """Mutate ``event`` in place with the provided update fields."""
     _apply_field_updates(event, args)
+    _check_span(event.start, event.end, event.all_day)
     _apply_attendee_updates(event, args)
 
 

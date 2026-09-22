@@ -608,8 +608,80 @@ def test_passing_all_day_false_on_a_timed_event_changes_nothing(patch_client):
 
 
 def test_updating_only_the_start_leaves_the_end_in_its_own_zone(patch_client):
-    """Rescheduling keeps the series anchored to Berlin instead of to UTC."""
-    body = _zoned_update(patch_client, {"start": "2026-01-05T11:00:00+01:00"})
-    assert "DTSTART;TZID=Europe/Berlin:20260105T110000" in body
+    """Rescheduling keeps the series anchored to Berlin instead of to UTC.
+
+    The start moves earlier, so the untouched end still follows it; a start
+    pushed past the end is refused now, which the test below covers.
+    """
+    body = _zoned_update(patch_client, {"start": "2026-01-05T09:30:00+01:00"})
+    assert "DTSTART;TZID=Europe/Berlin:20260105T093000" in body
     assert "DTEND;TZID=Europe/Berlin:20260105T103000" in body
     assert "DTSTART:2026" not in body
+
+
+def test_moving_the_start_past_the_end_is_refused_before_the_server_sees_it(patch_client):
+    """The server answers a backwards span with a bare 400 after a round trip.
+
+    Saying it here names both values and writes nothing.
+    """
+    bodies: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=ZONED_ICS, headers={"ETag": '"v1"'})
+        bodies.append(request.content.decode())
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        patch_client(YandexCalDAVClient("user@yandex.ru", "app-pw", client=http))
+        out = json.loads(
+            tool.handle_update(
+                {
+                    "event_href": "/calendars/user@yandex.ru/events-42/e.ics",
+                    "start": "2026-01-05T11:00:00+01:00",
+                }
+            )
+        )
+    assert "updated" not in out
+    assert "must end after it starts" in out["error"]
+    assert bodies == [], "nothing may be written when the span is refused"
+
+
+def test_an_all_day_conversion_widens_the_span_instead_of_failing(patch_client):
+    """ "Make it all-day" is a reasonable request, not an error.
+
+    Keeping only the date part of a 10:00-10:30 meeting leaves both ends on one
+    day, and DTEND is exclusive for a whole-day event, so that is a zero-length
+    day the RFC forbids. Widen it to the day after instead.
+    """
+    body = _zoned_update(patch_client, {"all_day": True})
+    assert "DTSTART;VALUE=DATE:20260105" in body
+    assert "DTEND;VALUE=DATE:20260106" in body
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (
+            {"summary": "x", "start": "2026-01-05T11:00:00", "end": "2026-01-05T10:00:00"},
+            "must end after it starts",
+        ),
+        (
+            {"summary": "x", "start": "2026-01-05T11:00:00", "end": "2026-01-05T11:00:00"},
+            "must end after it starts",
+        ),
+        (
+            {"summary": "x", "start": "2026-01-05", "end": "2026-01-05"},
+            "must end on a later day",
+        ),
+        (
+            {"summary": "x", "start": "2026-01-05", "end": "2026-01-06T10:00:00"},
+            "same kind of value",
+        ),
+    ],
+)
+def test_creating_a_span_that_does_not_run_forwards_is_refused(args, expected):
+    """No client is built: the span is judged before anything is sent."""
+    out = json.loads(tool.handle_create(args))
+    assert "created" not in out
+    assert expected in out["error"]
