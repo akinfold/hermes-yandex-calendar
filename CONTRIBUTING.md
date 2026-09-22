@@ -29,6 +29,7 @@ hermes_yandex_calendar/
   py.typed      # PEP 561 marker
 tests/          # unit tests (no network, httpx.MockTransport)
 tests/e2e/      # live tests against a real account, marked `e2e`
+tests/install/  # installs the build into a real Hermes by every README route, marked `install`
 ```
 
 ## Ground rules
@@ -63,6 +64,15 @@ are absent. To run them locally, put the credentials in files the e2e conftest p
 up (see `tests/e2e/conftest.py`) and run `pytest -m e2e`. Live tests are manual and
 never required for a PR.
 
+The install check lives in `tests/install/` and is marked `install`. It installs
+the built wheel, the drop-in archive, and the Git tree into a real Hermes, set up
+the way the Hermes installer sets it up, using the commands the README gives, and
+asks Hermes what it loaded. Change an install instruction in the README and you
+change the test: `test_readme_gives_the_commands_under_test`, which runs with the
+unit tests, fails until the two agree. The **Install check** workflow runs it on
+every pull request against the latest Hermes release and against Hermes `main`;
+the docstring of `tests/install/test_install.py` says how to run it locally.
+
 ## Commit & PR conventions
 
 - Focused commits with imperative subject lines (e.g. `caldav: keep VALARM blocks`).
@@ -88,6 +98,8 @@ Then tag:
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The publish workflow builds artifacts, creates a GitHub Release, and (if the repo
-variable `PUBLISH_TO_PYPI=true` and a PyPI Trusted Publisher is configured) publishes
-to PyPI.
+The publish workflow builds artifacts, runs the install check on exactly those
+artifacts, and only then creates a GitHub Release and (if the repo variable
+`PUBLISH_TO_PYPI=true` and a PyPI Trusted Publisher is configured) publishes to PyPI.
+If the install check fails, nothing is released: fix it, and move the tag or bump
+the version.
