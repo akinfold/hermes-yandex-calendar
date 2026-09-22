@@ -332,7 +332,7 @@ def test_a_zoned_recurring_event_keeps_its_zone_on_the_server():
             fetched = client.get_event(href)
             assert fetched is not None
             fetched.summary = f"{marker} zoned series (renamed)"
-            client.update_event(fetched, href)
+            _update_showing_the_body(client, fetched, href)
             renamed = _server_copy(client, href)
             _assert_still_zoned(renamed, tzid, local)
             assert any("RRULE:FREQ=WEEKLY" in line.upper() for line in renamed)
@@ -341,11 +341,28 @@ def test_a_zoned_recurring_event_keeps_its_zone_on_the_server():
             fetched = client.get_event(href)
             assert fetched is not None
             fetched.start = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)  # 11:00 in Berlin
-            client.update_event(fetched, href)
+            _update_showing_the_body(client, fetched, href)
             moved = _server_copy(client, href)
             _assert_still_zoned(moved, tzid, "20260302T110000")
         finally:
             _erase(client, href)
+
+
+def _update_showing_the_body(client, event, href: str) -> None:
+    """Update, and on refusal show the document we tried to write.
+
+    A server that rejects our rebuild tells us nothing by itself; the bytes we
+    sent are the whole diagnosis, and this is a throwaway event.
+    """
+    from hermes_yandex_calendar.ical import build_calendar
+
+    try:
+        client.update_event(event, href)
+    except CalDAVError:
+        print("--- the document the server refused ---")
+        print(build_calendar(event))
+        print("--- end ---")
+        raise
 
 
 def _erase(client, href: str) -> None:
