@@ -11,10 +11,14 @@ provides_tools:
   - yandex_calendar_respond_event
   - yandex_calendar_move_event
   - yandex_calendar_delete_event
+# `hermes plugins install` asks for each of these that ~/.hermes/.env lacks.
+# Hermes reads `name`, `description`, `url` and `secret`, and drops an entry
+# without a `name`.
 requires_env:
-  - key: YANDEX_CALENDAR_LOGIN
-    prompt: "Yandex login / email (e.g. you@yandex.ru)"
+  - name: YANDEX_CALENDAR_LOGIN
+    description: "Yandex login / email (e.g. you@yandex.ru)"
     url: "https://id.yandex.ru/security/app-passwords"
-  - key: YANDEX_CALENDAR_APP_PASSWORD
-    prompt: "Yandex app password for CalDAV"
+  - name: YANDEX_CALENDAR_APP_PASSWORD
+    description: "Yandex app password for CalDAV"
     url: "https://id.yandex.ru/security/app-passwords"
+    secret: true
