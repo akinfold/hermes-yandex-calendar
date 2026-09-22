@@ -340,10 +340,16 @@ def test_a_zoned_recurring_event_keeps_its_zone_on_the_server():
             # 3. Rescheduling must keep the anchoring, only the value may move.
             fetched = client.get_event(href)
             assert fetched is not None
+            # Both ends move: a start past an unchanged end is an event that
+            # finishes before it begins, and the server rejects it with a 400.
             fetched.start = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)  # 11:00 in Berlin
+            fetched.end = datetime(2026, 3, 2, 10, 30, tzinfo=UTC)  # 11:30 in Berlin
             _update_showing_the_body(client, fetched, href)
             moved = _server_copy(client, href)
             _assert_still_zoned(moved, tzid, "20260302T110000")
+            dtend = next(line for line in _vevent(moved) if line.upper().startswith("DTEND"))
+            assert f"TZID={tzid}" in dtend, f"DTEND lost its zone: {dtend}"
+            assert dtend.endswith("20260302T113000"), dtend
         finally:
             _erase(client, href)
 
