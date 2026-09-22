@@ -11,6 +11,13 @@ Any property it does not model (RRULE, VALARM blocks, SEQUENCE, …) is preserve
 verbatim in ``Event.raw_props`` and re-emitted on build, so editing an event
 never silently drops recurrence rules or alarms.
 
+The same holds for the times themselves. A DTSTART/DTEND the caller does not
+change is written back as the exact line it was read as, kept in
+``Event.raw_dt_lines``, so a local time keeps its ``TZID`` instead of being
+flattened into UTC; and the document's ``VTIMEZONE`` components ride along in
+``Event.timezones``, so those TZID references still resolve. Only a time the
+caller actually assigns is re-formatted, as a UTC instant.
+
 No Hermes imports here so it stays unit-testable in isolation.
 """
 
@@ -41,6 +48,18 @@ class Attendee:
     rsvp: bool | None = None
 
 
+# Which remembered DTSTART/DTEND lines a given field describes. Assigning the
+# field a different value makes those lines stale, so they are forgotten.
+_DT_LINES_BY_FIELD = {
+    "start": ("DTSTART",),
+    "end": ("DTEND",),
+    # all_day decides between ";VALUE=DATE" and a date-time for both ends.
+    "all_day": ("DTSTART", "DTEND"),
+}
+
+_UNSET = object()
+
+
 @dataclass
 class Event:
     """A calendar event.
@@ -48,6 +67,13 @@ class Event:
     ``href`` (the CalDAV resource path) and ``etag`` (the version the server gave
     that resource) are both filled in by the client when an event is read, and are
     not part of the iCalendar data.
+
+    ``start``/``end`` are the times as this model understands them: an instant for
+    a UTC or resolvable-``TZID`` value, a naive datetime for a floating one or a
+    zone :mod:`zoneinfo` cannot resolve, a :class:`date` for an all-day event.
+    That is lossy on purpose — it is what the tool layer reports and compares —
+    so the original lines are kept alongside in ``raw_dt_lines`` and rewritten
+    verbatim for as long as they still describe ``start``/``end``.
     """
 
     uid: str
@@ -64,6 +90,48 @@ class Event:
     etag: str = ""  # version tag from the server; enables conditional writes
     # Verbatim, already-unfolded content lines for properties we don't model.
     raw_props: list[str] = field(default_factory=list)
+    # {"DTSTART"/"DTEND": verbatim line}, as parsed. Empty for a new event.
+    # Not a constructor argument: the only way in is the parser, so a line can
+    # never arrive already contradicting the start or end it is stored beside,
+    # and ``dataclasses.replace`` starts an edited copy with no memory at all.
+    raw_dt_lines: dict[str, str] = field(
+        default_factory=dict, init=False, compare=False, repr=False
+    )
+    # The VTIMEZONE components of the document this event came from, each as its
+    # verbatim lines. They belong to the calendar rather than to one event, but
+    # the model that leaves this class is a single Event, so every event parsed
+    # from a document carries that document's definitions and can be rebuilt on
+    # its own without orphaning its TZID references.
+    # Unlike ``raw_dt_lines`` this one IS a constructor argument: a copy made
+    # with ``dataclasses.replace`` keeps the TZID references sitting in
+    # ``raw_props``, so dropping the definitions would hand back exactly the
+    # invalid document this field exists to prevent. A zone definition cannot
+    # contradict the times stored beside it, so there is nothing to guard.
+    timezones: list[list[str]] = field(default_factory=list, compare=False, repr=False)
+    # {"DTSTART"/"DTEND": TZID}, as parsed. Unlike the remembered lines this is
+    # NOT forgotten when the time changes: the zone is what the event is
+    # anchored to, not what it currently reads, and a caller who reschedules a
+    # 10:00 Berlin series to 11:00 means 11:00 in Berlin. Writing the new time
+    # as a UTC instant instead would re-anchor the series and move it again at
+    # the next daylight-saving change — the very bug this file is fixing.
+    dt_zones: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Forget a remembered DTSTART/DTEND line as soon as it stops being true.
+
+        Every write lands here, so no caller has to remember a bookkeeping step:
+        giving ``start``, ``end`` or ``all_day`` a new value drops the verbatim
+        line for the properties it describes, and that property is formatted from
+        the model instead. Re-assigning the value it already has keeps the line —
+        it still denotes exactly that value, and an update that repeats an
+        unchanged ``all_day`` must not cost the event its time zone.
+        """
+        remembered = getattr(self, "raw_dt_lines", None)
+        stale = _DT_LINES_BY_FIELD.get(name)
+        if remembered and stale and getattr(self, name, _UNSET) != value:
+            for prop in stale:
+                remembered.pop(prop, None)
+        super().__setattr__(name, value)
 
 
 # --- line handling ---------------------------------------------------------
@@ -249,7 +317,11 @@ def _apply_property(event: Event, line: str) -> None:
     """Fold one VEVENT content line into ``event``.
 
     Anything this model does not cover (RRULE, SEQUENCE, X- extensions, …) is kept
-    verbatim in ``raw_props`` so it survives a parse/build round-trip.
+    verbatim in ``raw_props`` so it survives a parse/build round-trip. DTSTART and
+    DTEND are modelled *and* kept verbatim in ``raw_dt_lines``: the model drives
+    the tool layer, the line is what goes back on the wire while the caller leaves
+    the time alone. Each is remembered after the parsed values are assigned,
+    because assigning them is what clears the memory.
     """
     name, params, value = _split_prop(line)
     if name == "UID":
@@ -258,10 +330,14 @@ def _apply_property(event: Event, line: str) -> None:
         setattr(event, _TEXT_PROPS[name], _unescape(value))
     elif name == "DTSTART":
         event.start, event.all_day = _parse_dt(value, params)
+        event.raw_dt_lines["DTSTART"] = line
+        _remember_zone(event, "DTSTART", params)
     elif name == "DTEND":
         end, all_day = _parse_dt(value, params)
         event.end = end
         event.all_day = event.all_day or all_day
+        event.raw_dt_lines["DTEND"] = line
+        _remember_zone(event, "DTEND", params)
     elif name == "TRANSP":
         event.transp = value.strip().upper()
     elif name == "ORGANIZER":
@@ -272,12 +348,86 @@ def _apply_property(event: Event, line: str) -> None:
         event.raw_props.append(line)
 
 
+def _remember_zone(event: Event, prop: str, params: dict[str, str]) -> None:
+    """Note the TZID this end was written in, so a new time can use it too."""
+    tzid = params.get("TZID", "").strip()
+    if tzid:
+        event.dt_zones[prop] = tzid
+
+
 def parse_events(text: str) -> list[Event]:
-    """Parse every VEVENT found in an iCalendar document."""
+    """Parse every VEVENT found in an iCalendar document.
+
+    The document's VTIMEZONE components are collected too and attached to every
+    event, so an event written back on its own still defines the zones its TZID
+    parameters name. Nothing else outside the VEVENTs is kept.
+    """
+    lines = _unfold(text)
+    timezones = _parse_timezones(lines)
+    events = _parse_vevents(lines)
+    for event in events:
+        # a copy each: editing one event must not reach the others
+        event.timezones = [list(component) for component in timezones]
+    return events
+
+
+def _timezone_key(component: list[str]) -> str:
+    """The TZID this VTIMEZONE defines, or its whole text when it names none."""
+    for line in component[1:]:
+        name, _params, value = _split_prop(line)
+        if name == "TZID":
+            return value.strip()
+        if name == "BEGIN":  # into STANDARD/DAYLIGHT: no TZID at this level
+            break
+    return "\n".join(component)
+
+
+def _parse_timezones(lines: list[str]) -> list[list[str]]:
+    """Every VTIMEZONE in the document, verbatim, at most one per TZID.
+
+    Sub-components (STANDARD, DAYLIGHT) are part of the block and come along;
+    their lines need no special handling, because only ``END:VTIMEZONE`` closes
+    a block. A block the document never closes is dropped rather than
+    half-emitted: a counter of BEGIN/END depth would be balanced by the VEVENT's
+    own END and the calendar's, and the "component" would come back holding the
+    rest of the file, to be spliced in front of the real VEVENT.
+    """
+    components: list[list[str]] = []
+    seen: set[str] = set()
+    current: list[str] | None = None
+    for line in lines:
+        if not line:
+            # RFC 5545 has no empty content line; re-emitting one can cost a PUT.
+            continue
+        upper = line.upper()
+        if upper.startswith("BEGIN:VTIMEZONE"):
+            current = [line]  # abandons an unclosed block, if any
+        elif current is None:
+            continue
+        elif upper.startswith(("BEGIN:VEVENT", "END:VCALENDAR")):
+            current = None  # this block was never closed
+        else:
+            current.append(line)
+            if upper.startswith("END:VTIMEZONE"):
+                _remember_timezone(components, seen, current)
+                current = None
+    return components
+
+
+def _remember_timezone(components: list[list[str]], seen: set[str], block: list[str]) -> None:
+    """Keep the first block for each TZID; two with one TZID is invalid anyway."""
+    key = _timezone_key(block)
+    if key not in seen:
+        seen.add(key)
+        components.append(block)
+
+
+def _parse_vevents(lines: list[str]) -> list[Event]:
+    """Every VEVENT in the document. Anything outside one is not ours to keep."""
     events: list[Event] = []
     current: Event | None = None
     nested: list[str] = []  # open sub-components inside the VEVENT (VALARM, …)
-    for line in _unfold(text):
+    for line in lines:
         upper = line.upper()
         if current is None:
             if upper.startswith("BEGIN:VEVENT"):
@@ -309,11 +459,17 @@ def build_calendar(
 
     ``dtstamp`` (if given and the event carries no DTSTAMP of its own) is emitted
     as the required RFC 5545 DTSTAMP; the client passes ``now`` on create/update.
+
+    The event's ``timezones`` are emitted ahead of the VEVENT, where RFC 5545
+    wants them: a TZID must be defined before the component referencing it. The
+    calendar's other properties are not ours to reproduce — the PRODID written
+    here is this plugin's own.
     """
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         f"PRODID:{prodid}",
+        *(line for component in event.timezones for line in component),
         "BEGIN:VEVENT",
         f"UID:{_escape(event.uid)}",
         *_event_lines(event, dtstamp),
@@ -338,12 +494,56 @@ def _event_lines(event: Event, dtstamp: datetime | None) -> list[str]:
         if value:
             # TRANSP carries an enum token, so escaping is a no-op for it.
             lines.append(f"{prop}:{_escape(value)}")
-    for prop, moment in (("DTSTART", event.start), ("DTEND", event.end)):
-        if moment is not None:
-            suffix, val = _format_dt(moment, event.all_day)
-            lines.append(f"{prop}{suffix}:{val}")
+    lines.extend(_datetime_lines(event))
     if event.organizer is not None:
         lines.append(_format_cal_address("ORGANIZER", event.organizer))
     lines.extend(_format_cal_address("ATTENDEE", a) for a in event.attendees)
     lines.extend(event.raw_props)
     return lines
+
+
+def _datetime_lines(event: Event) -> list[str]:
+    """DTSTART/DTEND: the line as read while it still holds, otherwise formatted.
+
+    A remembered line wins because it says more than the model can: the zone the
+    user picked, or a value we failed to parse and must not silently drop.
+    :meth:`Event.__setattr__` removes it the moment the value changes, so this
+    can never emit a time the event no longer has.
+    """
+    lines: list[str] = []
+    for prop, moment in (("DTSTART", event.start), ("DTEND", event.end)):
+        remembered = event.raw_dt_lines.get(prop)
+        if remembered is not None:
+            lines.append(remembered)
+        elif moment is not None:
+            lines.append(
+                _zoned_line(event, prop, moment) or _plain_line(prop, moment, event.all_day)
+            )
+    return lines
+
+
+def _plain_line(prop: str, moment: datetime | date, all_day: bool) -> str:
+    suffix, val = _format_dt(moment, all_day)
+    return f"{prop}{suffix}:{val}"
+
+
+def _zoned_line(event: Event, prop: str, moment: datetime | date) -> str | None:
+    """A changed time, written in the zone the event was anchored to.
+
+    Returns ``None`` whenever that cannot be done honestly: an all-day value has
+    no zone, a floating time has none to convert from, the zone name may be one
+    :mod:`zoneinfo` does not know, and above all the document must still define
+    the TZID — emitting a reference this build cannot define would trade one
+    invalid document for another. In each of those the caller falls back to the
+    plain UTC form, which is what this module did for every value before.
+    """
+    tzid = event.dt_zones.get(prop)
+    if not tzid or event.all_day or not isinstance(moment, datetime) or moment.tzinfo is None:
+        return None
+    if ZoneInfo is None or not any(_timezone_key(block) == tzid for block in event.timezones):
+        return None
+    try:
+        local = moment.astimezone(ZoneInfo(tzid))
+    except Exception:  # unknown zone -> the plain form is the honest fallback
+        return None
+    return f"{prop};TZID={tzid}:{local.strftime('%Y%m%dT%H%M%S')}"

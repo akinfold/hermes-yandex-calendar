@@ -1234,3 +1234,57 @@ def test_move_keeps_the_original_when_the_target_does_not_store_the_copy():
     with pytest.raises(CalDAVError, match="does not store it"):
         client.move_event("/calendars/user@yandex.ru/events-42/evt-1.ics", "Personal")
     assert "DELETE" not in calls  # the original survives
+
+
+ZONED_EVENT_ICS = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Yandex LLC//Yandex Calendar//EN
+BEGIN:VTIMEZONE
+TZID:Europe/Berlin
+BEGIN:DAYLIGHT
+DTSTART:19700329T020000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:evt-tz
+SUMMARY:Standup
+DTSTART;TZID=Europe/Berlin:20260105T100000
+DTEND;TZID=Europe/Berlin:20260105T103000
+RRULE:FREQ=WEEKLY;BYDAY=MO
+ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:user@yandex.ru
+END:VEVENT
+END:VCALENDAR"""
+
+
+def _zoned_handler(bodies: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=ZONED_EVENT_ICS)
+        bodies.append(request.content.decode())
+        return httpx.Response(204)
+
+    return handler
+
+
+def test_update_event_writes_the_local_times_back_unchanged():
+    bodies: list[str] = []
+    client = make_client(_zoned_handler(bodies))
+    event = client.get_event("/cal/evt-tz.ics")
+    event.summary = "Standup (renamed)"
+    client.update_event(event, "/cal/evt-tz.ics")
+    assert "DTSTART;TZID=Europe/Berlin:20260105T100000" in bodies[0]
+    assert "DTEND;TZID=Europe/Berlin:20260105T103000" in bodies[0]
+    assert "20260105T090000Z" not in bodies[0]
+    assert "BEGIN:VTIMEZONE" in bodies[0]
+    assert "TZID:Europe/Berlin" in bodies[0]
+
+
+def test_responding_to_an_invitation_does_not_move_the_meeting():
+    bodies: list[str] = []
+    make_client(_zoned_handler(bodies)).respond_to_event("/cal/evt-tz.ics", "ACCEPTED")
+    assert "ATTENDEE;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:user@yandex.ru" in bodies[0]
+    assert "DTSTART;TZID=Europe/Berlin:20260105T100000" in bodies[0]
+    assert "BEGIN:VTIMEZONE" in bodies[0]

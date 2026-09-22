@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import os
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -219,3 +220,167 @@ def test_move_between_calendars():
             assert client.get_event(created.href) is None  # the original is gone
         finally:
             client.delete_event((moved or created).href)
+
+
+def _unfolded(text: str) -> list[str]:
+    """Undo RFC 5545 folding so a line can be matched as one string.
+
+    The server is free to fold where it likes, so comparing raw text would fail
+    for reasons that have nothing to do with what is being tested.
+    """
+    out: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line[:1] in (" ", "\t") and out:
+            out[-1] += line[1:]
+        else:
+            out.append(line)
+    return out
+
+
+def _server_copy(client, href: str) -> list[str]:
+    """The resource as the SERVER holds it, unfolded, without going through our parser.
+
+    Reading it back with ``get_event`` would prove nothing here: our parser
+    resolves a TZID into an instant, so a server that had normalised the event
+    into UTC would still hand back the right moment and the test would pass.
+    """
+    document = client._fetch_document(href)  # private on purpose: the raw text is the point
+    assert document is not None, "the event vanished from the server"
+    return _unfolded(document[0])
+
+
+def _vevent(lines: list[str]) -> list[str]:
+    """Only the VEVENT's own lines.
+
+    A VTIMEZONE carries DTSTART lines of its own, one per STANDARD/DAYLIGHT
+    rule, and they come first in the document — searching the whole thing for
+    "DTSTART" finds a daylight-saving rule from 1981, not the event.
+    """
+    start = next(i for i, line in enumerate(lines) if line.upper().startswith("BEGIN:VEVENT"))
+    end = next(i for i, line in enumerate(lines) if line.upper().startswith("END:VEVENT"))
+    return lines[start : end + 1]
+
+
+def _dtstart(lines: list[str]) -> str:
+    return next(line for line in _vevent(lines) if line.upper().startswith("DTSTART"))
+
+
+def _assert_still_zoned(lines: list[str], tzid: str, local: str) -> None:
+    """The three things that say the zone survived the round trip."""
+    assert any(line.upper().startswith("BEGIN:VTIMEZONE") for line in lines), (
+        "the server dropped the VTIMEZONE component"
+    )
+    assert f"TZID:{tzid}" in lines, f"the server did not keep the {tzid} definition"
+    dtstart = _dtstart(lines)
+    assert f"TZID={tzid}" in dtstart, f"DTSTART lost its zone: {dtstart}"
+    assert dtstart.endswith(local), f"DTSTART is not the local time we wrote: {dtstart}"
+    # The one that catches a server normalising to UTC: the instant would still
+    # be right, so every positive check above could pass while the anchoring —
+    # the whole point — was gone.
+    assert not dtstart.rstrip().endswith("Z"), f"the server normalised DTSTART to UTC: {dtstart}"
+
+
+@requires_creds
+def test_a_zoned_recurring_event_keeps_its_zone_on_the_server():
+    """Does Yandex store a local time with its zone, and keep it across an edit?
+
+    Everything else in this suite reads events back through our own parser, which
+    hides exactly the failure that matters. This one compares what the server
+    holds. The event is a weekly series anchored to Europe/Berlin and starting
+    before the spring changeover: if the zone is lost anywhere along the way, the
+    stored series silently moves an hour from late March onwards.
+    """
+    marker = os.environ.get("YC_E2E_MARKER", "hermes-e2e")
+    tzid = "Europe/Berlin"
+    local = "20260302T100000"
+    body = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//hermes-yandex-calendar//e2e//EN\r\n"
+        f"BEGIN:VTIMEZONE\r\nTZID:{tzid}\r\n"
+        "BEGIN:STANDARD\r\nDTSTART:19701025T030000\r\n"
+        "TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n"
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\nEND:STANDARD\r\n"
+        "BEGIN:DAYLIGHT\r\nDTSTART:19700329T020000\r\n"
+        "TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n"
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\nEND:DAYLIGHT\r\n"
+        "END:VTIMEZONE\r\n"
+        "BEGIN:VEVENT\r\n"
+        f"UID:{marker}-zoned\r\n"
+        f"SUMMARY:{marker} zoned series\r\n"
+        "DESCRIPTION:Created by hermes-yandex-calendar e2e; safe to delete.\r\n"
+        f"DTSTART;TZID={tzid}:{local}\r\n"
+        f"DTEND;TZID={tzid}:20260302T103000\r\n"
+        "RRULE:FREQ=WEEKLY;BYDAY=MO\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    with build_client() as client:
+        collection = client.resolve_calendar_href(None).rstrip("/") + "/"
+        href = f"{collection}{marker}-zoned.ics"
+        resp = client._request(  # private: we write a document we control byte for byte
+            "PUT",
+            href,
+            content=body,
+            headers={"Content-Type": "text/calendar; charset=utf-8"},
+        )
+        assert resp.status_code in (200, 201, 204), f"PUT failed: HTTP {resp.status_code}"
+        try:
+            # 1. What the server made of what we wrote.
+            _assert_still_zoned(_server_copy(client, href), tzid, local)
+
+            # 2. An edit that does not touch the time must not move the event.
+            fetched = client.get_event(href)
+            assert fetched is not None
+            fetched.summary = f"{marker} zoned series (renamed)"
+            _update_showing_the_body(client, fetched, href)
+            renamed = _server_copy(client, href)
+            _assert_still_zoned(renamed, tzid, local)
+            assert any("RRULE:FREQ=WEEKLY" in line.upper() for line in renamed)
+
+            # 3. Rescheduling must keep the anchoring, only the value may move.
+            fetched = client.get_event(href)
+            assert fetched is not None
+            # Both ends move: a start past an unchanged end is an event that
+            # finishes before it begins, and the server rejects it with a 400.
+            fetched.start = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)  # 11:00 in Berlin
+            fetched.end = datetime(2026, 3, 2, 10, 30, tzinfo=UTC)  # 11:30 in Berlin
+            _update_showing_the_body(client, fetched, href)
+            moved = _server_copy(client, href)
+            _assert_still_zoned(moved, tzid, "20260302T110000")
+            dtend = next(line for line in _vevent(moved) if line.upper().startswith("DTEND"))
+            assert f"TZID={tzid}" in dtend, f"DTEND lost its zone: {dtend}"
+            assert dtend.endswith("20260302T113000"), dtend
+        finally:
+            _erase(client, href)
+
+
+def _update_showing_the_body(client, event, href: str) -> None:
+    """Update, and on refusal show the document we tried to write.
+
+    A server that rejects our rebuild tells us nothing by itself; the bytes we
+    sent are the whole diagnosis, and this is a throwaway event.
+    """
+    from hermes_yandex_calendar.ical import build_calendar
+
+    try:
+        client.update_event(event, href)
+    except CalDAVError:
+        print("--- the document the server refused ---")
+        print(build_calendar(event))
+        print("--- end ---")
+        raise
+
+
+def _erase(client, href: str) -> None:
+    """Delete by href and confirm it is gone, retrying: the server is eventual.
+
+    Deleting by href rather than by searching avoids waiting for an index to
+    catch up, and the retry covers a DELETE the server accepts but has not yet
+    applied to what a GET returns.
+    """
+    client.delete_event(href)
+    for _ in range(10):
+        if client._fetch_document(href) is None:
+            return
+        time.sleep(1)
+    raise AssertionError(f"the throwaway event survived deletion: {href}")

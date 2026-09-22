@@ -554,3 +554,62 @@ def test_move_reports_a_left_behind_original_as_a_clean_error(patch_client):
         )
     assert "both calendars" in out["error"]
     assert "Unexpected" not in out["error"]
+
+
+ZONED_ICS = (
+    "BEGIN:VCALENDAR\r\n"
+    "BEGIN:VTIMEZONE\r\n"
+    "TZID:Europe/Berlin\r\n"
+    "BEGIN:DAYLIGHT\r\n"
+    "DTSTART:19700329T020000\r\n"
+    "TZOFFSETFROM:+0100\r\n"
+    "TZOFFSETTO:+0200\r\n"
+    "END:DAYLIGHT\r\n"
+    "END:VTIMEZONE\r\n"
+    "BEGIN:VEVENT\r\n"
+    "UID:e\r\n"
+    "SUMMARY:Standup\r\n"
+    "DTSTART;TZID=Europe/Berlin:20260105T100000\r\n"
+    "DTEND;TZID=Europe/Berlin:20260105T103000\r\n"
+    "RRULE:FREQ=WEEKLY;BYDAY=MO\r\n"
+    "END:VEVENT\r\n"
+    "END:VCALENDAR\r\n"
+)
+
+
+def _zoned_update(patch_client, args: dict) -> str:
+    bodies: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=ZONED_ICS, headers={"ETag": '"v1"'})
+        bodies.append(request.content.decode())
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        patch_client(YandexCalDAVClient("user@yandex.ru", "app-pw", client=http))
+        out = json.loads(
+            tool.handle_update({"event_href": "/calendars/user@yandex.ru/events-42/e.ics", **args})
+        )
+    assert out.get("updated") is True, out
+    return bodies[0]
+
+
+def test_updating_the_title_leaves_a_recurring_meeting_where_it_was(patch_client):
+    body = _zoned_update(patch_client, {"summary": "Standup (renamed)"})
+    assert "DTSTART;TZID=Europe/Berlin:20260105T100000" in body
+    assert "BEGIN:VTIMEZONE" in body
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO" in body
+
+
+def test_passing_all_day_false_on_a_timed_event_changes_nothing(patch_client):
+    body = _zoned_update(patch_client, {"summary": "Standup", "all_day": False})
+    assert "DTSTART;TZID=Europe/Berlin:20260105T100000" in body
+
+
+def test_updating_only_the_start_leaves_the_end_in_its_own_zone(patch_client):
+    """Rescheduling keeps the series anchored to Berlin instead of to UTC."""
+    body = _zoned_update(patch_client, {"start": "2026-01-05T11:00:00+01:00"})
+    assert "DTSTART;TZID=Europe/Berlin:20260105T110000" in body
+    assert "DTEND;TZID=Europe/Berlin:20260105T103000" in body
+    assert "DTSTART:2026" not in body
