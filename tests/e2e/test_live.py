@@ -249,8 +249,20 @@ def _server_copy(client, href: str) -> list[str]:
     return _unfolded(document[0])
 
 
+def _vevent(lines: list[str]) -> list[str]:
+    """Only the VEVENT's own lines.
+
+    A VTIMEZONE carries DTSTART lines of its own, one per STANDARD/DAYLIGHT
+    rule, and they come first in the document — searching the whole thing for
+    "DTSTART" finds a daylight-saving rule from 1981, not the event.
+    """
+    start = next(i for i, line in enumerate(lines) if line.upper().startswith("BEGIN:VEVENT"))
+    end = next(i for i, line in enumerate(lines) if line.upper().startswith("END:VEVENT"))
+    return lines[start : end + 1]
+
+
 def _dtstart(lines: list[str]) -> str:
-    return next(line for line in lines if line.upper().startswith("DTSTART"))
+    return next(line for line in _vevent(lines) if line.upper().startswith("DTSTART"))
 
 
 def _assert_still_zoned(lines: list[str], tzid: str, local: str) -> None:
