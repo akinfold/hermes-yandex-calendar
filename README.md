@@ -356,9 +356,11 @@ The **E2E (live)** workflow is manual (`workflow_dispatch`). It reads
 from the **secrets** of a GitHub Environment named `yandex-calendar-e2e`. All three
 must be secrets — the workflow reads nothing from environment variables, so a value
 defined as a variable arrives empty: without the credentials every test is skipped,
-and without `YC_E2E_ATTENDEES` the suite falls back to the `+e2e` sub-address. The
-optional `install_hermes` input also runs `pip install hermes-agent` beforehand, on a
-best-effort basis.
+and without `YC_E2E_ATTENDEES` the suite falls back to the `+e2e` sub-address. It
+runs the plugin inside a real Hermes, set up the way the Hermes installer sets it up:
+the latest Hermes release by default, and its `hermes` input switches to Hermes
+`main` or to no Hermes at all. With Hermes, the run fails outright if the plugin
+cannot import it, rather than testing the plugin's stand-ins instead.
 
 ## Checking the install paths
 
