@@ -65,19 +65,21 @@ up (see `tests/e2e/conftest.py`) and run `pytest -m e2e`. Live tests are manual 
 never required for a PR.
 
 The install check lives in `tests/install/` and is marked `install`. It installs
-the built wheel, the drop-in archive, and the Git tree into a real Hermes, set up
-the way the Hermes installer sets it up, using the commands the README gives, and
-asks Hermes what it loaded. Change an install instruction in the README and you
-change the test: `test_readme_gives_the_commands_under_test`, which runs with the
-unit tests, fails until the two agree. The **Install check** workflow runs it on
-every pull request against the latest Hermes release and against Hermes `main`;
-the docstring of `tests/install/test_install.py` says how to run it locally.
+the Git tree, the drop-in archive, and (on a Hermes in the older layout) the
+built wheel into a real Hermes set up by its official installer, using the
+commands the README gives, and asks Hermes what it loaded. Change an install
+instruction in the README and you change the test:
+`test_readme_gives_the_commands_under_test`, which runs with the unit tests, fails
+until the two agree. The **Install check** workflow runs it on every pull request
+against the latest Hermes release and against Hermes `main`. It installs into the
+real `~/.hermes`, so run it yourself only in a container or VM; the docstring of
+`tests/install/test_install.py` says how.
 
 ## Commit & PR conventions
 
 - Focused commits with imperative subject lines (e.g. `caldav: keep VALARM blocks`).
 - Open a PR against `main`, fill in the template, and link any related issue.
-- CI (lint + tests on Python 3.11–3.13, coverage ≥ 90%) must pass.
+- CI (lint + tests on Python 3.11–3.14, coverage ≥ 90%) must pass.
 
 ## Reporting security issues
 

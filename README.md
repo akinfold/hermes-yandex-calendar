@@ -31,12 +31,13 @@ your real calendar, over CalDAV, with no third-party service in the middle.
 - 🔑 **App password, not your account password** — scoped to CalDAV, revocable in
   one click.
 
-Tested against Hermes **0.19.x**, Python **3.11–3.13**.
+Checked before every release against the latest Hermes release and Hermes `main`,
+each installed by its official installer; Python **3.11–3.14**.
 
 ## Quick start
 
 ```bash
-# 1. Install into Hermes (or from PyPI — see Installing, Option B). It asks for
+# 1. Install into Hermes (other ways: see Installing the plugin). It asks for
 #    your login and an app password, which comes from
 #    https://id.yandex.ru/security/app-passwords (scope: "Calendar (CalDAV)")
 hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable
@@ -230,36 +231,46 @@ manifest name `yandex_calendar`, and `--enable` enables that name. It also scans
 only that directory, so the tests and workflows in this repository stay out of the
 security report.
 
-Point it at the repository root instead and the install still appears to succeed,
-but it copies a directory with no manifest and no `register(ctx)` in it: Hermes
-warns that it "may not be a valid Hermes plugin", asks for nothing, and enables the
-repository name, which nothing answers to. There is no error to look for: what
-gives it away is `hermes plugins list`, which shows the plugin under its real
-name with `not enabled` beside it, because `--enable` wrote the repository name
-into `plugins.enabled` and nothing matches it. If you are in that state, remove
-`~/.hermes/plugins/hermes-yandex-calendar` and install again with the directory
-named — enabling the real name on top of the broken install leaves a stray
-entry behind.
+Point it at the repository root instead and Hermes copies a directory with no
+manifest and no `register(ctx)` in it: it warns that it "may not be a valid Hermes
+plugin", asks for no credentials, and does not enable the plugin. What gives it
+away is `hermes plugins list`, which still shows `yandex_calendar` — the package
+nested in the clone is found — but with `not enabled` beside it. If you are in
+that state, remove `~/.hermes/plugins/hermes-yandex-calendar` and install again
+with the directory named.
 
 ### Option B — from PyPI
 
-Install the package into the virtualenv Hermes runs from, then enable it. With
-the standard Hermes install that virtualenv is `~/.hermes/hermes-agent/venv`
-(`/usr/local/lib/hermes-agent/venv` if the installer ran as root on Linux), and
-Hermes keeps its own `uv` in `~/.hermes/bin`:
+For a Hermes whose Python environment you manage yourself — your own virtualenv,
+a Nix build: install `hermes-yandex-calendar` into that environment, then enable
+the plugin. Hermes finds it through the `hermes_agent.plugins` entry point, and
+`httpx` and `defusedxml` come along as its dependencies.
+
+```bash
+hermes plugins enable yandex_calendar
+```
+
+**Not for a standard Hermes install.** Since 24 September 2026 the official
+installer runs Hermes from environments its package manager builds and replaces,
+and Hermes does not support adding packages to them by hand: use Option A or C.
+
+A Hermes in the older layout — one that runs from `~/.hermes/hermes-agent/venv`
+and keeps its own `uv` in `~/.hermes/bin`, with no `~/.hermes/installs`, which is
+what Hermes 0.21.5 and anything installed before that date and not updated since
+look like — takes the package like this:
 
 ```bash
 ~/.hermes/bin/uv pip install --python ~/.hermes/hermes-agent/venv/bin/python hermes-yandex-calendar
 hermes plugins enable yandex_calendar
 ```
 
-A bare `pip install hermes-yandex-calendar` does not get there: the installer
-builds that virtualenv with `uv` and without `pip`, so the `pip` on your `PATH`
-belongs to some other Python, and Hermes never sees the plugin. If you installed
-Hermes another way, install the package into whichever environment the `hermes`
-command runs from. Hermes finds it through the `hermes_agent.plugins` entry point.
-Nothing asks for credentials on this path — add them to `~/.hermes/.env` as in the
-[Quick start](#quick-start).
+Switch such an install to Option A before you run `hermes update`: the update
+moves Hermes onto the new environments, and a package installed this way does not
+come along. A bare `pip install hermes-yandex-calendar` never reached Hermes at
+all — the `pip` on your `PATH` belongs to some other Python.
+
+Nothing asks for credentials on this path — add them to `~/.hermes/.env` as in
+the [Quick start](#quick-start).
 
 ### Option C — drop-in directory
 
@@ -273,26 +284,57 @@ unzip hermes-yandex-calendar-plugin-<version>.zip -d ~/.hermes/plugins/
 hermes plugins enable yandex_calendar
 ```
 
-You should end up with `~/.hermes/plugins/yandex_calendar/plugin.yaml`. As with
-Option B, add the credentials to `~/.hermes/.env` yourself.
+You should end up with `~/.hermes/plugins/yandex_calendar/plugin.yaml`. Nothing
+asks for credentials here either: add them to `~/.hermes/.env` yourself.
 
 ### Dependencies on Options A and C
 
 Options A and C copy the plugin's sources and install nothing else, so `httpx` and
 `defusedxml` have to be in the environment Hermes runs in already. A standard
-Hermes install has both: `httpx` is a Hermes dependency, and `defusedxml` comes in
-with one of the extras the installer includes. If yours lacks it, the plugin fails
-to load with `No module named 'defusedxml'`; install it the same way Option B
-installs the plugin:
+Hermes install has both — checked on Hermes 0.21.5 and on `main`, and again by
+the install check before every release — so there is nothing to add.
+
+If you built Hermes' environment yourself and it lacks one, the plugin fails to
+load with `No module named 'defusedxml'` (or `'httpx'`). Install the missing
+package into that environment the way you manage it, or install the plugin by
+Option B, which brings both with it.
+
+### Upgrading
+
+Upgrade the way you installed. Option A — Hermes 0.21.5 and later install the
+new version from the source they recorded:
 
 ```bash
-~/.hermes/bin/uv pip install --python ~/.hermes/hermes-agent/venv/bin/python 'defusedxml>=0.7'
+hermes plugins update yandex_calendar
 ```
 
-Option B brings both with it.
+Older Hermes cannot update an install from a plugin directory, and no Hermes
+updates one pinned with `--ref`: run the install command again with `--force`,
+which replaces the installed copy and keeps your credentials.
 
-All three options are checked before every release by installing the build into
-a real Hermes — the latest release and `main` — exactly as written here; see
+```bash
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable --force
+```
+
+Both scan the new version again, but unlike a first install neither stops to ask
+when Hermes' security scan reports a caution.
+
+Option C — unzip the new release's archive over the old one:
+
+```bash
+unzip -o hermes-yandex-calendar-plugin-<version>.zip -d ~/.hermes/plugins/
+```
+
+Option B — upgrade the package in the same environment: in the older layout,
+
+```bash
+~/.hermes/bin/uv pip install --upgrade --python ~/.hermes/hermes-agent/venv/bin/python hermes-yandex-calendar
+```
+
+Options A and C, and their upgrades, are checked before every release by
+installing the build into a real Hermes — the latest release and `main`, each set
+up by its official installer — exactly as written here; the Option B install is
+checked on the latest release while it still has the older layout. See
 [Checking the install paths](#checking-the-install-paths).
 
 ## Development
@@ -357,26 +399,30 @@ from the **secrets** of a GitHub Environment named `yandex-calendar-e2e`. All th
 must be secrets — the workflow reads nothing from environment variables, so a value
 defined as a variable arrives empty: without the credentials every test is skipped,
 and without `YC_E2E_ATTENDEES` the suite falls back to the `+e2e` sub-address. It
-runs the plugin inside a real Hermes, set up the way the Hermes installer sets it up:
-the latest Hermes release by default, and its `hermes` input switches to Hermes
-`main` or to no Hermes at all. With Hermes, the run fails outright if the plugin
-cannot import it, rather than testing the plugin's stand-ins instead.
+runs the plugin inside a real Hermes, installed by its official installer: the
+latest Hermes release by default, and its `hermes` input switches to Hermes `main`
+or to no Hermes at all. With Hermes, the tests run in Hermes' own Python,
+with this checkout on its path rather than installed into Hermes' environment, and
+the run fails outright if the plugin cannot import Hermes, rather than testing the
+plugin's stand-ins instead.
 
 ## Checking the install paths
 
 The `install`-marked tests in `tests/install/` install the built plugin into a
-real Hermes, set up the way the official installer sets it up, by each option in
+real Hermes, set up by its official installer, by each option in
 [Installing the plugin into Hermes](#installing-the-plugin-into-hermes) — running
-the README's own commands — and then ask Hermes what it loaded: the plugin must be
-listed as enabled, load without error, and give the agent its tools. They also
-check that installing from the repository root still looks the way this README
-describes. A fast unit test keeps the commands in the tests and in this README
-identical.
+the README's own commands, upgrades included — and then ask Hermes what it
+loaded: the plugin must be listed as enabled, load without error, and give the
+agent its tools. For Options A and C they also check that Hermes' own Python
+already has `httpx` and `defusedxml`, and they check that installing from the
+repository root still looks the way this README describes. A fast unit test keeps
+the commands in the tests and in this README identical.
 
 The **Install check** workflow runs them against the latest Hermes release and
 against Hermes `main` on every pull request, and on every release tag before
 anything is published: the GitHub Release and the PyPI upload both wait for it.
-To run them locally, see the docstring of `tests/install/test_install.py`.
+They install into a real `~/.hermes`, so run them yourself only in a container or
+VM — see the docstring of `tests/install/test_install.py`.
 
 ## Related Hermes plugins
 
