@@ -15,8 +15,17 @@ The same holds for the times themselves. A DTSTART/DTEND the caller does not
 change is written back as the exact line it was read as, kept in
 ``Event.raw_dt_lines``, so a local time keeps its ``TZID`` instead of being
 flattened into UTC; and the document's ``VTIMEZONE`` components ride along in
-``Event.timezones``, so those TZID references still resolve. Only a time the
-caller actually assigns is re-formatted, as a UTC instant.
+``Event.timezones``, so those TZID references still resolve.
+
+A time the caller does change is re-formatted in the zone that end was read in
+(``Event.dt_zones``): a 10:00 Berlin series moved to 11:00 is written as 11:00
+Berlin, so it does not drift an hour at the next daylight-saving change. It
+falls back to a UTC instant only when that zone cannot be written honestly: the
+end was not read with a ``TZID`` (a new event, or a UTC or floating time), the
+document carries no ``VTIMEZONE`` defining that ``TZID``, or :mod:`zoneinfo`
+does not know the zone. So a re-formatted time never refers to a ``TZID`` the
+document does not define. An all-day value is always written as ``VALUE=DATE``,
+and a naive datetime as floating local time.
 
 No Hermes imports here so it stays unit-testable in isolation.
 """
