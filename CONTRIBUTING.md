@@ -94,10 +94,11 @@ Bump the version in **three** files that must stay in sync:
 - `hermes_yandex_calendar/__init__.py`
 - `hermes_yandex_calendar/plugin.yaml`
 
-Then tag:
+Commit the bump, then tag that commit. Releases use an annotated tag, not a
+lightweight one:
 
 ```bash
-git tag vX.Y.Z && git push origin vX.Y.Z
+git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z
 ```
 
 The publish workflow builds artifacts, runs the install check on exactly those
