@@ -50,6 +50,14 @@ DEFAULT_BASE_URL = "https://caldav.yandex.ru"
 #: process; the cap keeps that short.
 MAX_XML_BYTES = 2 * 1024 * 1024
 
+#: The longest namespace URI _parse_xml accepts, in characters. CalDAV's are
+#: short: "DAV:", "urn:ietf:params:xml:ns:caldav". Every element and attribute
+#: in a namespace carries the URI in its name, and pyexpat builds that name as
+#: a new string for each of them, so one long URI declared once and used by
+#: many short elements costs time far beyond the document's size: a 1 MiB URI
+#: used by 20 000 elements took six seconds to parse.
+MAX_NAMESPACE_URI_CHARS = 256
+
 #: The oldest Expat this plugin parses with: a safety margin on top of the
 #: guards in _parse_xml, not a promise that Expat has no bugs. The guards work
 #: on any Expat: refusing the DTD rules out every entity and every external
@@ -204,6 +212,43 @@ def _clark(name: str) -> str:
     return "{" + name if "}" in name else name
 
 
+class _Names(dict):
+    """Expat's names spelled by :func:`_clark`, one string for each distinct name.
+
+    Every element and attribute in a namespace carries its URI in its name. Spelled
+    afresh for each of them, the names would make the tree hold a copy of the URI
+    per element; shared, as ElementTree's own parser shares them, there is one.
+    """
+
+    def __missing__(self, name: str) -> str:
+        spelled = self[name] = _clark(name)
+        return spelled
+
+
+class _Tree:
+    """Expat's element and namespace handlers for one :func:`_parse_xml` call."""
+
+    def __init__(self, what: str) -> None:
+        self.what = what
+        self.builder = ET.TreeBuilder()
+        self.names = _Names()
+
+    def check_namespace(self, _prefix: str | None, uri: str | None) -> None:
+        """Expat calls this at each namespace declaration, before the element starts."""
+        if len(uri or "") > MAX_NAMESPACE_URI_CHARS:
+            raise CalDAVError(
+                f"Rejected {self.what}: it declares a namespace URI longer than "
+                f"{MAX_NAMESPACE_URI_CHARS} characters"
+            )
+
+    def start(self, tag: str, attrib: dict[str, str]) -> None:
+        names = self.names
+        self.builder.start(names[tag], {names[name]: value for name, value in attrib.items()})
+
+    def end(self, tag: str) -> None:
+        self.builder.end(self.names[tag])
+
+
 def _refuse_dtd(what: str, *_args: object) -> None:
     """Expat calls this at ``<!DOCTYPE``, before it reads any of the DTD."""
     raise CalDAVError(f"Rejected unsafe {what}: it declares a DTD")
@@ -214,7 +259,9 @@ def _parse_xml(raw: bytes, what: str, *, if_too_large: str = "") -> ET.Element:
 
     *what* names the response in every error, and *if_too_large* is appended to
     the size refusal. The document must be UTF-8, whatever encoding it or the
-    ``Content-Type`` header declares, and at most :data:`MAX_XML_BYTES` long.
+    ``Content-Type`` header declares, and at most :data:`MAX_XML_BYTES` long,
+    and none of its namespace URIs may be longer than
+    :data:`MAX_NAMESPACE_URI_CHARS`.
     Entities can only be declared in a DTD, so refusing the DTD at
     ``<!DOCTYPE`` leaves no entity to expand (billion laughs, quadratic blowup)
     and no external entity or DTD to resolve; Expat itself never opens files or
@@ -223,21 +270,20 @@ def _parse_xml(raw: bytes, what: str, *, if_too_large: str = "") -> ET.Element:
     """
     _check_expat_version(what)
     _check_document(raw, what, if_too_large)
-    builder = ET.TreeBuilder()
+    tree = _Tree(what)
     # The encoding given here overrides the one the document declares, so Expat
     # never calls back into Python's codecs for an encoding it lacks.
     parser = expat.ParserCreate(encoding="utf-8", namespace_separator="}")
     parser.StartDoctypeDeclHandler = functools.partial(_refuse_dtd, what)
-    parser.StartElementHandler = lambda tag, attrib: builder.start(
-        _clark(tag), {_clark(name): value for name, value in attrib.items()}
-    )
-    parser.EndElementHandler = lambda tag: builder.end(_clark(tag))
-    parser.CharacterDataHandler = builder.data
+    parser.StartNamespaceDeclHandler = tree.check_namespace
+    parser.StartElementHandler = tree.start
+    parser.EndElementHandler = tree.end
+    parser.CharacterDataHandler = tree.builder.data
     try:
         parser.Parse(raw, True)
     except expat.ExpatError as exc:
         raise CalDAVError(f"Could not parse {what}: {exc}") from exc
-    return builder.close()
+    return tree.builder.close()
 
 
 def _local(tag: str) -> str:

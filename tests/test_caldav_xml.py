@@ -15,6 +15,7 @@ import pytest
 
 from hermes_yandex_calendar import caldav, tool
 from hermes_yandex_calendar.caldav import (
+    MAX_NAMESPACE_URI_CHARS,
     MAX_XML_BYTES,
     MIN_EXPAT_VERSION,
     CalDAVError,
@@ -40,6 +41,14 @@ REPORT_DTD = "Rejected unsafe calendar-query response: it declares a DTD"
 DISCOVERY_DTD = "Rejected unsafe discovery response: it declares a DTD"
 
 NOT_UTF8 = "Rejected calendar-query response: it is not UTF-8"
+
+LONG_NAMESPACE = (
+    "Rejected calendar-query response: it declares a namespace URI longer than "
+    f"{MAX_NAMESPACE_URI_CHARS} characters"
+)
+
+#: A namespace URI exactly as long as _parse_xml allows.
+LONGEST_URI = "urn:" + "u" * (MAX_NAMESPACE_URI_CHARS - 4)
 
 FILE_TEXT = "the contents of a local file"
 
@@ -228,6 +237,41 @@ def test_refuses_a_discovery_response_over_the_size_limit() -> None:
         f"Refusing to parse the discovery response: it is {MAX_XML_BYTES + 1} bytes, "
         f"more than the limit of {MAX_XML_BYTES}"
     )
+
+
+# -- names and namespaces cost what ElementTree's do ---------------------------
+
+
+def test_elements_share_one_string_for_each_name() -> None:
+    # Each element and attribute in a namespace carries its URI in its name.
+    # ElementTree's own parser keeps one string per distinct name; one built
+    # afresh per element would hold a copy of the URI for every element.
+    elements = "<a:x a:k='1' plain='2'/>" * 3
+    root = _parse_xml(f"<r xmlns:a='{LONGEST_URI}'>{elements}</r>".encode(), "test document")
+    assert [element.tag for element in root] == ["{" + LONGEST_URI + "}x"] * 3
+    assert len({id(element.tag) for element in root}) == 1
+    for name in ("{" + LONGEST_URI + "}k", "plain"):
+        keys = [next(key for key in element.attrib if key == name) for element in root]
+        assert len({id(key) for key in keys}) == 1
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [f"xmlns='{LONGEST_URI}u'", f"xmlns:a='{LONGEST_URI}u'"],
+    ids=["default", "prefixed"],
+)
+def test_refuses_a_namespace_uri_over_the_length_limit(declaration: str) -> None:
+    # Declared on an element deep inside, and never used: refused all the same.
+    head, tail = report().split(b"<d:getetag>", 1)
+    raw = head + f"<d:getetag {declaration}>".encode() + tail
+    with pytest.raises(CalDAVError) as exc_info:
+        events_from(raw)
+    assert str(exc_info.value) == LONG_NAMESPACE
+
+
+def test_accepts_a_namespace_uri_at_the_length_limit() -> None:
+    root = _parse_xml(f"<a:r xmlns:a='{LONGEST_URI}' xmlns='{LONGEST_URI}'/>".encode(), "test")
+    assert root.tag == "{" + LONGEST_URI + "}r"
 
 
 def meeting(index: int) -> str:
@@ -438,6 +482,9 @@ DEFAULT_NAMESPACE_REPORT = (
 
 EMPTY_MULTISTATUS = "<?xml version='1.0'?><d:multistatus xmlns:d='DAV:'></d:multistatus>"
 
+#: The default namespace undeclared on a child: Expat reports that URI as None.
+UNDECLARED_DEFAULT = "<multistatus xmlns='DAV:'><x xmlns=''><y/></x><response/></multistatus>"
+
 
 @pytest.mark.parametrize(
     "text",
@@ -451,6 +498,7 @@ EMPTY_MULTISTATUS = "<?xml version='1.0'?><d:multistatus xmlns:d='DAV:'></d:mult
         CDATA_REPORT,
         DEFAULT_NAMESPACE_REPORT,
         EMPTY_MULTISTATUS,
+        UNDECLARED_DEFAULT,
         report().decode(),
         discovery().decode(),
         "<d:multistatus xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:caldav'>"
@@ -545,6 +593,7 @@ def test_readme_names_the_same_minimum_and_size_limit() -> None:
     text = " ".join(readme.split())
     assert f"Expat {minimum} or newer" in text
     assert f"an XML document larger than {MAX_XML_BYTES // (1024 * 1024)} MiB" in text
+    assert f"namespace URI longer than {MAX_NAMESPACE_URI_CHARS} characters" in text
 
 
 def test_this_python_has_a_supported_expat() -> None:
@@ -563,8 +612,9 @@ def test_this_python_has_a_supported_expat() -> None:
         (report(), (2, 4, 4), "this Python uses Expat 2.4.4, older than 2.4.5"),
         (report().replace(b"Meeting", b"M" * MAX_XML_BYTES), None, "list a shorter time range"),
         ("<r>x</r>".encode("utf-16"), None, NOT_UTF8),
+        (f"<r xmlns='{LONGEST_URI}u'/>".encode(), None, LONG_NAMESPACE),
     ],
-    ids=["dtd", "old-expat", "too-large", "utf-16"],
+    ids=["dtd", "old-expat", "too-large", "utf-16", "long-namespace"],
 )
 def test_list_events_reports_xml_it_will_not_parse(
     monkeypatch: pytest.MonkeyPatch,
