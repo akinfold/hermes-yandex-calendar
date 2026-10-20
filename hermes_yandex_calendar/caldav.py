@@ -58,6 +58,13 @@ MAX_XML_BYTES = 2 * 1024 * 1024
 #: used by 20 000 elements took six seconds to parse.
 MAX_NAMESPACE_URI_CHARS = 256
 
+#: The deepest nesting of elements _parse_xml accepts. The answers this client
+#: reads are six levels deep at most (multistatus, response, propstat, prop,
+#: resourcetype, calendar). 2 MiB of open tags can nest hundreds of thousands
+#: deep, which took Expat 0.63 s and 186 MiB, four times the memory of a flat
+#: document that size.
+MAX_XML_DEPTH = 32
+
 #: The oldest Expat this plugin parses with: a safety margin on top of the
 #: guards in _parse_xml, not a promise that Expat has no bugs. The guards work
 #: on any Expat: refusing the DTD rules out every entity and every external
@@ -232,6 +239,7 @@ class _Tree:
         self.what = what
         self.builder = ET.TreeBuilder()
         self.names = _Names()
+        self.depth = 0
 
     def check_namespace(self, _prefix: str | None, uri: str | None) -> None:
         """Expat calls this at each namespace declaration, before the element starts."""
@@ -242,10 +250,16 @@ class _Tree:
             )
 
     def start(self, tag: str, attrib: dict[str, str]) -> None:
+        self.depth += 1
+        if self.depth > MAX_XML_DEPTH:
+            raise CalDAVError(
+                f"Rejected {self.what}: its elements are nested more than {MAX_XML_DEPTH} deep"
+            )
         names = self.names
         self.builder.start(names[tag], {names[name]: value for name, value in attrib.items()})
 
     def end(self, tag: str) -> None:
+        self.depth -= 1
         self.builder.end(self.names[tag])
 
 
@@ -259,9 +273,9 @@ def _parse_xml(raw: bytes, what: str, *, if_too_large: str = "") -> ET.Element:
 
     *what* names the response in every error, and *if_too_large* is appended to
     the size refusal. The document must be UTF-8, whatever encoding it or the
-    ``Content-Type`` header declares, and at most :data:`MAX_XML_BYTES` long,
-    and none of its namespace URIs may be longer than
-    :data:`MAX_NAMESPACE_URI_CHARS`.
+    ``Content-Type`` header declares, and at most :data:`MAX_XML_BYTES` long;
+    its elements may nest at most :data:`MAX_XML_DEPTH` deep, and none of its
+    namespace URIs may be longer than :data:`MAX_NAMESPACE_URI_CHARS`.
     Entities can only be declared in a DTD, so refusing the DTD at
     ``<!DOCTYPE`` leaves no entity to expand (billion laughs, quadratic blowup)
     and no external entity or DTD to resolve; Expat itself never opens files or
@@ -293,6 +307,16 @@ def _local(tag: str) -> str:
 
 def _findall_local(element, name: str) -> list:
     return [e for e in element.iter() if _local(e.tag) == name]
+
+
+def _responses(multistatus) -> list:
+    """The ``response`` elements of a multistatus: its children, and nothing deeper.
+
+    A response nested inside another is not one (RFC 4918, section 14.16), and
+    reading it as one would walk the elements under it once more for each
+    response it sits in.
+    """
+    return [child for child in multistatus if _local(child.tag) == "response"]
 
 
 # Yandex delivers all of these to the same mailbox and rewrites addresses to the
@@ -539,7 +563,7 @@ class YandexCalDAVClient:
 
     def _parse_calendars(self, raw: bytes) -> list[Calendar]:
         root = _parse_xml(raw, "discovery response")
-        parsed = (_calendar_from_response(r) for r in _findall_local(root, "response"))
+        parsed = (_calendar_from_response(r) for r in _responses(root))
         return [cal for cal in parsed if cal is not None]
 
     def list_calendars(self) -> list[Calendar]:
@@ -671,7 +695,7 @@ class YandexCalDAVClient:
             raw, "calendar-query response", if_too_large="; list a shorter time range"
         )
         events: list[Event] = []
-        for response in _findall_local(root, "response"):
+        for response in _responses(root):
             events.extend(_events_from_response(response))
         return events
 

@@ -17,6 +17,7 @@ from hermes_yandex_calendar import caldav, tool
 from hermes_yandex_calendar.caldav import (
     MAX_NAMESPACE_URI_CHARS,
     MAX_XML_BYTES,
+    MAX_XML_DEPTH,
     MIN_EXPAT_VERSION,
     CalDAVError,
     Calendar,
@@ -45,6 +46,10 @@ NOT_UTF8 = "Rejected calendar-query response: it is not UTF-8"
 LONG_NAMESPACE = (
     "Rejected calendar-query response: it declares a namespace URI longer than "
     f"{MAX_NAMESPACE_URI_CHARS} characters"
+)
+
+TOO_DEEP = (
+    f"Rejected calendar-query response: its elements are nested more than {MAX_XML_DEPTH} deep"
 )
 
 #: A namespace URI exactly as long as _parse_xml allows.
@@ -272,6 +277,37 @@ def test_refuses_a_namespace_uri_over_the_length_limit(declaration: str) -> None
 def test_accepts_a_namespace_uri_at_the_length_limit() -> None:
     root = _parse_xml(f"<a:r xmlns:a='{LONGEST_URI}' xmlns='{LONGEST_URI}'/>".encode(), "test")
     assert root.tag == "{" + LONGEST_URI + "}r"
+
+
+def nested_report(levels: int) -> bytes:
+    """report(), with *levels* elements nested one in another inside its ``prop``."""
+    head, tail = report().split(b"<d:getetag>", 1)
+    return head + b"<x>" * levels + b"</x>" * levels + b"<d:getetag>" + tail
+
+
+def test_refuses_elements_nested_deeper_than_the_limit() -> None:
+    # multistatus, response, propstat and prop hold the nested elements.
+    (event,) = events_from(nested_report(MAX_XML_DEPTH - 4))
+    assert event.summary == "Meeting"
+    with pytest.raises(CalDAVError) as exc_info:
+        events_from(nested_report(MAX_XML_DEPTH - 3))
+    assert str(exc_info.value) == TOO_DEEP
+
+
+def nest_response(outer: bytes, old: bytes, new: bytes) -> bytes:
+    """*outer*, with a copy of its response, *old* replaced by *new*, inside its own."""
+    inner = outer[outer.index(b"<d:response>") : outer.index(b"</d:multistatus>")]
+    return outer.replace(b"<d:propstat>", inner.replace(old, new) + b"<d:propstat>", 1)
+
+
+def test_reads_responses_only_at_the_top_of_the_multistatus() -> None:
+    # A response inside another is not one. Read as one, its event would be
+    # listed twice: on its own, and as the first calendar-data in the outer one.
+    (event,) = events_from(nest_response(report(), b"evt-1.ics", b"evt-2.ics"))
+    assert event.href == CALENDAR + "evt-1.ics"
+    other = CALENDAR.replace("events-42", "events-43").encode()
+    calendars = calendars_from(nest_response(discovery(), CALENDAR.encode(), other))
+    assert [calendar.href for calendar in calendars] == [CALENDAR]
 
 
 def meeting(index: int) -> str:
@@ -594,6 +630,7 @@ def test_readme_names_the_same_minimum_and_size_limit() -> None:
     assert f"Expat {minimum} or newer" in text
     assert f"an XML document larger than {MAX_XML_BYTES // (1024 * 1024)} MiB" in text
     assert f"namespace URI longer than {MAX_NAMESPACE_URI_CHARS} characters" in text
+    assert f"nests its elements more than {MAX_XML_DEPTH} deep" in text
 
 
 def test_this_python_has_a_supported_expat() -> None:
@@ -613,8 +650,9 @@ def test_this_python_has_a_supported_expat() -> None:
         (report().replace(b"Meeting", b"M" * MAX_XML_BYTES), None, "list a shorter time range"),
         ("<r>x</r>".encode("utf-16"), None, NOT_UTF8),
         (f"<r xmlns='{LONGEST_URI}u'/>".encode(), None, LONG_NAMESPACE),
+        (nested_report(MAX_XML_DEPTH), None, TOO_DEEP),
     ],
-    ids=["dtd", "old-expat", "too-large", "utf-16", "long-namespace"],
+    ids=["dtd", "old-expat", "too-large", "utf-16", "long-namespace", "too-deep"],
 )
 def test_list_events_reports_xml_it_will_not_parse(
     monkeypatch: pytest.MonkeyPatch,

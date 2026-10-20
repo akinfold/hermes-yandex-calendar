@@ -258,13 +258,13 @@ trusted-agent mode, not the recommended starting point for a new deployment.
   the older layout, run `~/.hermes/bin/uv python install 3.11` and re-run the
   v2026.9.24 installer, which then builds its venv on uv's Python.
 - The plugin parses the server's XML with the standard library. It refuses,
-  saying why, a response that declares a DTD, is not UTF-8 or declares a
-  namespace URI longer than 256 characters (CalDAV's are short, such as
-  `DAV:`), and an XML document larger than 2 MiB. Only a list of events gets
-  that large: it carries
-  the full text of every event in the range, about 2.5 KB for a meeting with
-  five attendees, so 2 MiB holds over 800 such meetings, and a month with ten
-  of them every working day comes to about 550 KB. Asked for more,
+  saying why, a response that declares a DTD, is not UTF-8, nests its elements
+  more than 32 deep or declares a namespace URI longer than 256 characters
+  (CalDAV's are short, such as `DAV:`), and an XML document larger than 2 MiB.
+  Only a list of events gets that large: it carries the full text of every
+  event in the range, about 2.5 KB for a meeting with five attendees, so 2 MiB
+  holds over 800 such meetings, and a month with ten of them every working day
+  comes to about 550 KB. Asked for more,
   `yandex_calendar_list_events` answers that the listing is too large and to
   list a shorter time range.
 
