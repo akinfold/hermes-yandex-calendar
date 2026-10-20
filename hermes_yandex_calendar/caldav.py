@@ -48,6 +48,11 @@ DEFAULT_BASE_URL = "https://caldav.yandex.ru"
 #: also bounds the time and memory of any cost in Expat not known yet. pyexpat
 #: holds the GIL while it parses, so a slow parse blocks the whole Hermes
 #: process; the cap keeps that short.
+#: Building the tree and reading the events from it then cost time and memory
+#: in proportion to the document, so the cap bounds them too: names are shared
+#: (_Names), responses are read only at the top level (_responses), and
+#: ical.parse_events unfolds lines in one pass and shares a document's time
+#: zone definitions among its events.
 MAX_XML_BYTES = 2 * 1024 * 1024
 
 #: The longest namespace URI _parse_xml accepts, in characters. CalDAV's are
