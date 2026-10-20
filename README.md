@@ -81,6 +81,21 @@ Up to seven standalone tools, in the `yandex_calendar` toolset:
 | `yandex_calendar_move_event` | Move an event to another calendar, contents intact. |
 | `yandex_calendar_delete_event` | Delete an event by `href`. Idempotent: an `href` that no longer exists, or never did, is also reported as `deleted: true`. |
 
+**What the tools set off on Yandex's side.** They act as your account, and
+Yandex treats their changes like any other:
+
+- Adding attendees, to a new event or an existing one, makes Yandex email each
+  of them an invitation from your account.
+- An answer given with `yandex_calendar_respond_event` is your reply to the
+  invitation, and Yandex passes it on to the organizer.
+- `yandex_calendar_delete_event` removes the event from the server; the plugin
+  keeps no copy of it.
+- Changing, moving or deleting a meeting with attendees may also make Yandex
+  notify them.
+
+Every tool is available until `YANDEX_CALENDAR_ACTIONS` says otherwise — see
+[Restricting what the agent can do](#restricting-what-the-agent-can-do).
+
 **Recurring events are not expanded.** `yandex_calendar_list_events` runs a plain
 time-range query and reports each event as the server stores it. A recurring series
 is listed once, with the `start`/`end` of its *first* occurrence — which can lie well
