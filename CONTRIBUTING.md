@@ -44,7 +44,12 @@ The plugin follows the Hermes plugin contract; a few of these are load-bearing:
   `CalDAVError`, which the handlers translate.
 - **Relative imports only** in `__init__.py` — the plugin loads as
   `hermes_plugins.yandex_calendar`.
-- **Untrusted XML** from the server is parsed with `defusedxml`, never `xml.etree`.
+- **Nothing beyond `httpx` and the standard library.** The recommended installs copy
+  only the plugin directory, so nothing else would be installed; keep it that way.
+- **Untrusted XML** from the server is parsed only through `_parse_xml` in
+  `caldav.py`. It refuses any DTD, any document that is not UTF-8 or is larger than
+  `MAX_XML_BYTES`, and refuses to parse at all on an Expat older than
+  `MIN_EXPAT_VERSION`.
 - **Secrets** are resolved via `_compat.get_provider_env`; never log their values.
 
 ## Checks

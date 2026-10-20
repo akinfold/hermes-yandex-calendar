@@ -29,7 +29,8 @@ pm built it. The ``legacy`` channel, Hermes v2026.9.24, must give the older
 layout: there the test fails rather than skips, because the setup is broken.
 
 Options A and C install no dependencies, so their tests also check README.md's
-claim that Hermes' own Python already has them.
+claim that Hermes' own Python already has them, and that its Expat is not older
+than the oldest README.md says the plugin parses with.
 
 Each test changes the Hermes it runs against, then puts back what it changed:
 the plugin directories, ``config.yaml``, ``.env``, and a package installed from
@@ -61,6 +62,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+from hermes_yandex_calendar.caldav import MIN_EXPAT_VERSION
 
 from .hermes_env import hermes_python, is_pm_install
 
@@ -108,9 +111,10 @@ ADD_CREDENTIALS = (
     "  'you@yandex.ru' 'your-app-password' >> ~/.hermes/.env)\n"
     "chmod 600 ~/.hermes/.env"
 )
-#: The plugin's dependencies. README.md says a standard Hermes already has them,
-#: which Options A and C rely on: they copy the sources and install nothing else.
-DEPENDENCIES = ("httpx", "defusedxml")
+#: What the plugin imports beyond the standard library. README.md says Hermes
+#: itself depends on it, which Options A and C rely on: they copy the sources and
+#: install nothing else.
+DEPENDENCIES = ("httpx",)
 
 #: Not a README command: the mistake README.md warns about, pointing Hermes at
 #: the repository root instead of the plugin directory.
@@ -302,8 +306,17 @@ def _assert_pinned(home: Home, commit: str) -> None:
 
 
 def _assert_hermes_has_the_dependencies(home: Home) -> None:
-    """README.md: a standard Hermes install already has what Options A and C do not bring."""
+    """README.md: a standard Hermes install already has what Options A and C do not bring.
+
+    README.md also names the oldest Expat the plugin parses with, so check that
+    Hermes' Python is not older: on such a Python the plugin can list neither
+    calendars nor events.
+    """
     home.run(f"'{home.python}' -c 'import {', '.join(DEPENDENCIES)}'")
+    home.run(
+        f"'{home.python}' -c 'import pyexpat; "
+        f"assert pyexpat.version_info >= {MIN_EXPAT_VERSION}, pyexpat.EXPAT_VERSION'"
+    )
 
 
 def test_readme_gives_the_commands_under_test() -> None:

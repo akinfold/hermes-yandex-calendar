@@ -5,27 +5,69 @@ Speaks just enough CalDAV (RFC 4791) to discover calendars, run a time-range
 or a modified one (``If-Match`` when its ETag is known), answer an invitation, move an
 event between calendars (verbatim copy, read-back, then a conditional DELETE of the
 original), and DELETE an event.
-Untrusted server XML is parsed with :mod:`defusedxml` (never ``xml.etree``).
+The server's XML is untrusted and is parsed only through :func:`_parse_xml`, which
+needs nothing beyond the standard library.
 
 No Hermes imports — this is unit-testable with ``httpx.MockTransport``.
 """
 
 from __future__ import annotations
 
+import functools
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+# ElementTree only holds the parsed tree: _parse_xml drives Expat itself, checks
+# the document and the Expat version first, and refuses any DTD.
+from xml.etree import ElementTree as ET  # nosec B405
+from xml.parsers import expat
+
 import httpx
-from defusedxml import ElementTree as DET
 
 from .ical import Attendee, Event, build_calendar, parse_events
 
 __all__ = ["CalDAVError", "Calendar", "YandexCalDAVClient", "normalize_email"]
 
 DEFAULT_BASE_URL = "https://caldav.yandex.ru"
+
+#: The largest XML document _parse_xml accepts, in bytes. A calendar-query
+#: REPORT carries the full iCalendar text of every event in the requested range,
+#: about 2.5 KB for a meeting with five attendees and a short description, so
+#: the cap holds over 800 such meetings, and a month with ten of them every
+#: working day comes to about 550 KB. A longer range is refused with a hint to
+#: list a shorter one. A listing at the cap would come to over a million
+#: characters of tool output, ten times the 100 000 above which Hermes, by
+#: default, moves a tool result out of the conversation into a file, so a higher
+#: cap would gain the agent little.
+#: pyexpat feeds Expat chunks of 1 MiB, so a document this size takes at most
+#: two XML_Parse calls, and on Expat before 2.6.0 a token spanning them is
+#: re-scanned at most once: CVE-2023-52425 is bounded, not unreachable. The cap
+#: also bounds the time and memory of any cost in Expat not known yet. pyexpat
+#: holds the GIL while it parses, so a slow parse blocks the whole Hermes
+#: process; the cap keeps that short.
+MAX_XML_BYTES = 2 * 1024 * 1024
+
+#: The oldest Expat this plugin parses with: a safety margin on top of the
+#: guards in _parse_xml, not a promise that Expat has no bugs. The guards work
+#: on any Expat: refusing the DTD rules out every entity and every external
+#: fetch, reading only UTF-8 keeps Expat's UTF-16 decoder out of reach (it let
+#: malformed surrogates through before 2.8.5, CVE-2026-93990), and
+#: MAX_XML_BYTES bounds time and memory. They already neutralise what 2.4.5
+#: fixed, Expat passing malformed UTF-8 and namespace separators on to the
+#: application (CVE-2022-25235, CVE-2022-25236): malformed UTF-8 never reaches
+#: Expat, and a separator in a namespace URI only bends a name, which this
+#: module handles as plain Python text. Python can use the system libexpat
+#: instead of its own copy, so the version is checked at run time.
+#: Distributions backport fixes without raising the version, so the floor stays
+#: below what current ones ship (2.5.0 on Debian 12 and RHEL 9, 2.4.7 on
+#: Ubuntu 22.04).
+MIN_EXPAT_VERSION = (2, 4, 5)
+
+#: Where the README explains which Expat the plugin needs.
+REQUIREMENTS_URL = "https://github.com/akinfold/hermes-yandex-calendar#requirements"
 
 _PROPFIND_CALENDARS = (
     '<?xml version="1.0" encoding="utf-8"?>'
@@ -113,6 +155,89 @@ def _event_path(url: str) -> str:
 class Calendar:
     href: str
     display_name: str = ""
+
+
+def _version_text(version: tuple[int, ...]) -> str:
+    return ".".join(str(part) for part in version)
+
+
+def _check_expat_version(what: str) -> None:
+    """Refuse to parse anything with an Expat older than :data:`MIN_EXPAT_VERSION`."""
+    found = tuple(expat.version_info)
+    if found < MIN_EXPAT_VERSION:
+        raise CalDAVError(
+            f"Refusing to parse the {what}: this Python uses Expat {_version_text(found)}, "
+            f"older than {_version_text(MIN_EXPAT_VERSION)}, the oldest this plugin parses "
+            f"with. See {REQUIREMENTS_URL}"
+        )
+
+
+def _is_utf8(raw: bytes) -> bool:
+    """Whether *raw* is UTF-8 without a NUL byte, the only form Expat gets to read.
+
+    Even when told the encoding, Expat switches to UTF-16 at a UTF-16 byte order
+    mark, which is never UTF-8, or when either of the first two bytes is NUL; NUL
+    is refused anywhere.
+    """
+    if b"\x00" in raw:
+        return False
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _check_document(raw: bytes, what: str, if_too_large: str) -> None:
+    """Refuse a document larger than :data:`MAX_XML_BYTES` or not in UTF-8."""
+    if len(raw) > MAX_XML_BYTES:
+        raise CalDAVError(
+            f"Refusing to parse the {what}: it is {len(raw)} bytes, "
+            f"more than the limit of {MAX_XML_BYTES}{if_too_large}"
+        )
+    if not _is_utf8(raw):
+        raise CalDAVError(f"Rejected {what}: it is not UTF-8")
+
+
+def _clark(name: str) -> str:
+    """Spell a name as ElementTree does: Expat's ``uri}local`` becomes ``{uri}local``."""
+    return "{" + name if "}" in name else name
+
+
+def _refuse_dtd(what: str, *_args: object) -> None:
+    """Expat calls this at ``<!DOCTYPE``, before it reads any of the DTD."""
+    raise CalDAVError(f"Rejected unsafe {what}: it declares a DTD")
+
+
+def _parse_xml(raw: bytes, what: str, *, if_too_large: str = "") -> ET.Element:
+    """Parse an untrusted XML document into the tree ``ElementTree.fromstring`` would build.
+
+    *what* names the response in every error, and *if_too_large* is appended to
+    the size refusal. The document must be UTF-8, whatever encoding it or the
+    ``Content-Type`` header declares, and at most :data:`MAX_XML_BYTES` long.
+    Entities can only be declared in a DTD, so refusing the DTD at
+    ``<!DOCTYPE`` leaves no entity to expand (billion laughs, quadratic blowup)
+    and no external entity or DTD to resolve; Expat itself never opens files or
+    connections. ElementTree's own parser keeps parsing after a handler raises,
+    so Expat is driven here directly: a handler that raises stops it on the spot.
+    """
+    _check_expat_version(what)
+    _check_document(raw, what, if_too_large)
+    builder = ET.TreeBuilder()
+    # The encoding given here overrides the one the document declares, so Expat
+    # never calls back into Python's codecs for an encoding it lacks.
+    parser = expat.ParserCreate(encoding="utf-8", namespace_separator="}")
+    parser.StartDoctypeDeclHandler = functools.partial(_refuse_dtd, what)
+    parser.StartElementHandler = lambda tag, attrib: builder.start(
+        _clark(tag), {_clark(name): value for name, value in attrib.items()}
+    )
+    parser.EndElementHandler = lambda tag: builder.end(_clark(tag))
+    parser.CharacterDataHandler = builder.data
+    try:
+        parser.Parse(raw, True)
+    except expat.ExpatError as exc:
+        raise CalDAVError(f"Could not parse {what}: {exc}") from exc
+    return builder.close()
 
 
 def _local(tag: str) -> str:
@@ -364,13 +489,10 @@ class YandexCalDAVClient:
         )
         if resp.status_code >= 400:
             raise CalDAVError(f"Calendar discovery failed: HTTP {resp.status_code}")
-        return self._parse_calendars(resp.text, home)
+        return self._parse_calendars(resp.content)
 
-    def _parse_calendars(self, xml_text: str, home: str) -> list[Calendar]:
-        try:
-            root = DET.fromstring(xml_text)
-        except Exception as exc:
-            raise CalDAVError(f"Could not parse discovery response: {exc}") from exc
+    def _parse_calendars(self, raw: bytes) -> list[Calendar]:
+        root = _parse_xml(raw, "discovery response")
         parsed = (_calendar_from_response(r) for r in _findall_local(root, "response"))
         return [cal for cal in parsed if cal is not None]
 
@@ -496,13 +618,12 @@ class YandexCalDAVClient:
         )
         if resp.status_code >= 400:
             raise CalDAVError(f"Listing events failed: HTTP {resp.status_code}")
-        return self._parse_report(resp.text)
+        return self._parse_report(resp.content)
 
-    def _parse_report(self, xml_text: str) -> list[Event]:
-        try:
-            root = DET.fromstring(xml_text)
-        except Exception as exc:
-            raise CalDAVError(f"Could not parse calendar-query response: {exc}") from exc
+    def _parse_report(self, raw: bytes) -> list[Event]:
+        root = _parse_xml(
+            raw, "calendar-query response", if_too_large="; list a shorter time range"
+        )
         events: list[Event] = []
         for response in _findall_local(root, "response"):
             events.extend(_events_from_response(response))
