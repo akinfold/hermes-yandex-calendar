@@ -288,6 +288,9 @@ def _parse_xml(raw: bytes, what: str, *, if_too_large: str = "") -> ET.Element:
     # The encoding given here overrides the one the document declares, so Expat
     # never calls back into Python's codecs for an encoding it lacks.
     parser = expat.ParserCreate(encoding="utf-8", namespace_separator="}")
+    # One call for each run of text, as ElementTree's own parser asks for,
+    # rather than one for each line and each character reference in it.
+    parser.buffer_text = True
     parser.StartDoctypeDeclHandler = functools.partial(_refuse_dtd, what)
     parser.StartNamespaceDeclHandler = tree.check_namespace
     parser.StartElementHandler = tree.start

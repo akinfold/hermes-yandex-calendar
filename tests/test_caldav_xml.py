@@ -548,6 +548,22 @@ def test_builds_the_tree_elementtree_builds(text: str) -> None:
     assert shape(_parse_xml(text.encode(), "test document")) == shape(expected)
 
 
+def test_has_expat_buffer_character_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Unbuffered, Expat calls back once per line and per character reference:
+    # 2 MiB of newlines took five times as long and four times the memory.
+    created = []
+    create = caldav.expat.ParserCreate
+
+    def remember(*args: object, **kwargs: object):
+        created.append(create(*args, **kwargs))
+        return created[-1]
+
+    monkeypatch.setattr(caldav.expat, "ParserCreate", remember)
+    (event,) = events_from(DEFAULT_NAMESPACE_REPORT.encode())
+    assert event.summary == "Q&A <draft>"
+    assert [parser.buffer_text for parser in created] == [True]
+
+
 def test_builds_the_tree_elementtree_would_for_namespaced_attributes() -> None:
     root = _parse_xml(
         b"<?xml version='1.0' encoding='utf-8'?>"
