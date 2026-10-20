@@ -133,8 +133,10 @@ out of reach with `YANDEX_CALENDAR_CALENDARS`.
 | `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendars, e.g. `Work,Personal`. **The order matters: the first entry that matches a calendar makes it the default**, the one an unqualified create or list uses, and the listing follows the same order. Each entry is a calendar name or the last segment of its `href` (e.g. `events-12345`), matched case-insensitively; a full `href` is not accepted here. An entry that matches nothing is ignored and claims no position, and if none match, `yandex_calendar_list_calendars` returns an empty list while every other tool fails with `No calendars available matching …`. |
 | `YANDEX_CALENDAR_ACTIONS` | no | *(all)* | Comma-separated allow-list of actions the agent may perform — see below. |
 
-Credentials are read from the environment first, then from `~/.hermes/.env`, so they
-work in gateway and subprocess runs. Secret values are never logged.
+The plugin opens no file itself. It reads these settings through Hermes'
+`get_provider_env`, which resolves the active profile's settings and secrets: its
+environment variables first, then its `.env` file (`~/.hermes/.env` for the default
+profile). Secret values are never logged.
 
 Dates and times are ISO 8601 (`2026-07-25` or `2026-07-25T14:00:00+03:00`); a datetime
 without an offset is treated as UTC.
@@ -449,11 +451,13 @@ Or keep all three out of the command line, in `~/.yandex-calendar-login`,
 `~/.yandex-calendar-app-password`, and `~/.yandex-calendar-attendees`, and just run
 `pytest -m e2e` — see `tests/e2e/conftest.py`.
 
-The suite builds its client exactly as the plugin does, so every `YANDEX_CALENDAR_*`
-setting it does not find in the environment (or, for the credentials, in those files)
-is looked up in `~/.hermes/.env` — `YANDEX_CALENDAR_BASE_URL` and
-`YANDEX_CALENDAR_CALENDARS` included. On a machine with Hermes already configured,
-`pytest -m e2e` therefore runs against that account instead of skipping.
+The suite builds its client exactly as the plugin does, through `get_provider_env`.
+In this repository's own environment, as above, that is the plugin's stand-in,
+which reads the process environment only: every `YANDEX_CALENDAR_*` setting the
+suite uses, `YANDEX_CALENDAR_BASE_URL` and `YANDEX_CALENDAR_CALENDARS` included,
+comes from there or, for the credentials, from those files. A Hermes configured on
+the same machine is not consulted. The workflow below runs the suite in Hermes'
+own Python instead, where Hermes' own `get_provider_env` resolves them.
 
 ### On GitHub Actions
 

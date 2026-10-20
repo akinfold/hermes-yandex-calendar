@@ -21,7 +21,7 @@ pip install -e '.[dev]'
 hermes_yandex_calendar/
   ical.py       # iCalendar (RFC 5545) parsing/serialization, no Hermes imports
   caldav.py     # CalDAV client for Yandex, no Hermes imports
-  config.py     # env -> client, calendar allow-list, action allow-list
+  config.py     # settings -> client, calendar allow-list, action allow-list
   _compat.py    # real-vs-shim host env helper
   tool.py       # tool schemas + handlers (JSON in, JSON string out)
   __init__.py   # register(ctx) — the plugin entry point
@@ -50,7 +50,9 @@ The plugin follows the Hermes plugin contract; a few of these are load-bearing:
   `caldav.py`. It refuses any DTD, any document that is not UTF-8 or is larger than
   `MAX_XML_BYTES`, and refuses to parse at all on an Expat older than
   `MIN_EXPAT_VERSION`.
-- **Secrets** are resolved via `_compat.get_provider_env`; never log their values.
+- **Settings and secrets** are read only through `_compat.get_provider_env`:
+  Hermes' own helper inside Hermes, an environment-only stand-in outside it. The
+  plugin never opens a `.env` file itself. Never log secret values.
 
 ## Checks
 
