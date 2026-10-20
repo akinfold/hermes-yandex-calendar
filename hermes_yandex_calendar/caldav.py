@@ -38,7 +38,10 @@ DEFAULT_BASE_URL = "https://caldav.yandex.ru"
 #: about 2.5 KB for a meeting with five attendees and a short description, so
 #: the cap holds over 800 such meetings, and a month with ten of them every
 #: working day comes to about 550 KB. A longer range is refused with a hint to
-#: list a shorter one. A listing at the cap would come to over a million
+#: list a shorter one. A recurring event comes back whole, with every modified
+#: occurrence, whatever the range, so one long-running series can pass the cap
+#: on its own: about 700 modified occurrences of a fifteen-attendee meeting do,
+#: and the hint says so. A listing at the cap would come to over a million
 #: characters of tool output, ten times the 100 000 above which Hermes, by
 #: default, moves a tool result out of the conversation into a file, so a higher
 #: cap would gain the agent little.
@@ -85,6 +88,15 @@ MAX_XML_DEPTH = 32
 #: below what current ones ship (2.5.0 on Debian 12 and RHEL 9, 2.4.7 on
 #: Ubuntu 22.04).
 MIN_EXPAT_VERSION = (2, 4, 5)
+
+#: What the refusal of an oversized calendar-query response adds. A recurring
+#: event is returned whole, so when even a short range is refused, one series is
+#: the cause, and the agent should say so rather than shorten the range again.
+_LISTING_TOO_LARGE = (
+    "; list a shorter time range. A recurring event comes back whole, with all its "
+    "modified occurrences, whatever the range: if even one day is refused, a single "
+    "recurring series in this calendar is larger than the limit"
+)
 
 #: Where the README explains which Expat the plugin needs.
 REQUIREMENTS_URL = "https://github.com/akinfold/hermes-yandex-calendar#requirements"
@@ -699,9 +711,7 @@ class YandexCalDAVClient:
         return self._parse_report(resp.content)
 
     def _parse_report(self, raw: bytes) -> list[Event]:
-        root = _parse_xml(
-            raw, "calendar-query response", if_too_large="; list a shorter time range"
-        )
+        root = _parse_xml(raw, "calendar-query response", if_too_large=_LISTING_TOO_LARGE)
         events: list[Event] = []
         for response in _responses(root):
             events.extend(_events_from_response(response))

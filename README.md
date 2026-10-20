@@ -266,7 +266,10 @@ trusted-agent mode, not the recommended starting point for a new deployment.
   holds over 800 such meetings, and a month with ten of them every working day
   comes to about 550 KB. Asked for more,
   `yandex_calendar_list_events` answers that the listing is too large and to
-  list a shorter time range.
+  list a shorter time range. A recurring event counts in full, with every
+  modified occurrence it has, whichever range those fall in: about 700
+  modified occurrences of a meeting with fifteen attendees pass 2 MiB on their
+  own, and then no range that includes that series can be listed.
 
 ## Getting the app password
 

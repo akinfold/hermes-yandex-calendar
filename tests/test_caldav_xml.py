@@ -6,7 +6,7 @@ import codecs
 import json
 import socket
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -50,6 +50,13 @@ LONG_NAMESPACE = (
 
 TOO_DEEP = (
     f"Rejected calendar-query response: its elements are nested more than {MAX_XML_DEPTH} deep"
+)
+
+#: How the refusal of an oversized listing ends.
+SERIES_TOO_LARGE = (
+    "; list a shorter time range. A recurring event comes back whole, with all its "
+    "modified occurrences, whatever the range: if even one day is refused, a single "
+    "recurring series in this calendar is larger than the limit"
 )
 
 #: A namespace URI exactly as long as _parse_xml allows.
@@ -228,7 +235,7 @@ def test_refuses_a_report_over_the_size_limit() -> None:
         events_from(oversized)
     assert str(exc_info.value) == (
         f"Refusing to parse the calendar-query response: it is {MAX_XML_BYTES + 1} bytes, "
-        f"more than the limit of {MAX_XML_BYTES}; list a shorter time range"
+        f"more than the limit of {MAX_XML_BYTES}{SERIES_TOO_LARGE}"
     )
 
 
@@ -310,35 +317,43 @@ def test_reads_responses_only_at_the_top_of_the_multistatus() -> None:
     assert [calendar.href for calendar in calendars] == [CALENDAR]
 
 
-def meeting(index: int) -> str:
-    """One REPORT entry for a meeting, modelled on how Yandex stores one.
+#: How Yandex opens a calendar resource: its producer and the zone its times use.
+CALENDAR_HEAD = [
+    "BEGIN:VCALENDAR",
+    "PRODID:-//Yandex LLC//Yandex Calendar//EN",
+    "VERSION:2.0",
+    "CALSCALE:GREGORIAN",
+    "BEGIN:VTIMEZONE",
+    "TZID:Europe/Moscow",
+    "TZURL:http://tzurl.org/zoneinfo/Europe/Moscow",
+    "X-LIC-LOCATION:Europe/Moscow",
+    "BEGIN:STANDARD",
+    "TZOFFSETFROM:+0400",
+    "TZOFFSETTO:+0300",
+    "TZNAME:MSK",
+    "DTSTART:20141026T020000",
+    "RDATE:20141026T020000",
+    "END:STANDARD",
+    "END:VTIMEZONE",
+]
 
-    A time zone, an alarm, Yandex's URL and category, an organizer, five
-    attendees and a 300-character Russian description, folded and escaped as
-    CalDAV sends them. Not a captured response: an estimate of a typical one.
+
+def vevent(
+    index: int, *, attendees: int = 5, day: str = "20261021", recurrence: str = ""
+) -> list[str]:
+    """A meeting on *day*, modelled on how Yandex stores one.
+
+    An alarm, Yandex's URL and category, an organizer, *attendees* attendees and
+    a 300-character Russian description. *recurrence* is an RRULE or a
+    RECURRENCE-ID line. Not a captured event: an estimate of a typical one.
     """
-    lines = [
-        "BEGIN:VCALENDAR",
-        "PRODID:-//Yandex LLC//Yandex Calendar//EN",
-        "VERSION:2.0",
-        "CALSCALE:GREGORIAN",
-        "BEGIN:VTIMEZONE",
-        "TZID:Europe/Moscow",
-        "TZURL:http://tzurl.org/zoneinfo/Europe/Moscow",
-        "X-LIC-LOCATION:Europe/Moscow",
-        "BEGIN:STANDARD",
-        "TZOFFSETFROM:+0400",
-        "TZOFFSETTO:+0300",
-        "TZNAME:MSK",
-        "DTSTART:20141026T020000",
-        "RDATE:20141026T020000",
-        "END:STANDARD",
-        "END:VTIMEZONE",
+    return [
         "BEGIN:VEVENT",
-        "DTSTART;TZID=Europe/Moscow:20261021T100000",
-        "DTEND;TZID=Europe/Moscow:20261021T110000",
+        f"DTSTART;TZID=Europe/Moscow:{day}T100000",
+        f"DTEND;TZID=Europe/Moscow:{day}T110000",
         "SUMMARY:Еженедельная встреча команды по планированию",
         f"UID:{index:08d}a1b2c3d4e5f6@yandex.ru",
+        *([recurrence] if recurrence else []),
         "SEQUENCE:2",
         "DTSTAMP:20261020T090000Z",
         "CREATED:20261001T120000Z",
@@ -352,7 +367,7 @@ def meeting(index: int) -> str:
         *(
             f"ATTENDEE;PARTSTAT=NEEDS-ACTION;CN=Участник {n};ROLE=REQ-PARTICIPANT;"
             f"RSVP=TRUE:mailto:participant{n}@yandex.ru"
-            for n in range(5)
+            for n in range(attendees)
         ),
         "BEGIN:VALARM",
         "TRIGGER:-PT15M",
@@ -360,8 +375,11 @@ def meeting(index: int) -> str:
         "DESCRIPTION:Reminder",
         "END:VALARM",
         "END:VEVENT",
-        "END:VCALENDAR",
     ]
+
+
+def entry(index: int, lines: list[str]) -> str:
+    """One REPORT entry carrying *lines*, folded and escaped as CalDAV sends them."""
     text = "".join(_fold(line) + "\r\n" for line in lines)
     escaped = text.replace("&", "&amp;").replace("<", "&lt;")
     return (
@@ -370,6 +388,50 @@ def meeting(index: int) -> str:
         f"<c:calendar-data>{escaped}</c:calendar-data></d:prop>"
         "<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
     )
+
+
+def meeting(index: int) -> str:
+    """One REPORT entry for a meeting with five attendees, in a resource of its own."""
+    return entry(index, [*CALENDAR_HEAD, *vevent(index), "END:VCALENDAR"])
+
+
+def series(overrides: int, *, attendees: int = 15) -> str:
+    """One REPORT entry for a weekday series and *overrides* of its occurrences.
+
+    Yandex keeps a series and every modified occurrence of it in one resource,
+    and a calendar-query returns that resource whole, whatever the range.
+    """
+    days = [date(2025, 1, 1) + timedelta(days=n) for n in range(overrides)]
+    rule = "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+    modified = (
+        line
+        for day in days
+        for line in vevent(
+            0,
+            attendees=attendees,
+            day=f"{day:%Y%m%d}",
+            recurrence=f"RECURRENCE-ID;TZID=Europe/Moscow:{day:%Y%m%d}T100000",
+        )
+    )
+    return entry(
+        0,
+        [
+            *CALENDAR_HEAD,
+            *vevent(0, attendees=attendees, recurrence=rule),
+            *modified,
+            "END:VCALENDAR",
+        ],
+    )
+
+
+def listing(*entries: str) -> bytes:
+    """A calendar-query REPORT holding *entries*."""
+    return (
+        "<?xml version='1.0' encoding='utf-8'?>"
+        "<d:multistatus xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:caldav'>"
+        + "".join(entries)
+        + "</d:multistatus>"
+    ).encode()
 
 
 def _fold(line: str) -> str:
@@ -401,18 +463,30 @@ def test_the_size_limit_holds_a_busy_month_with_room_to_spare() -> None:
     assert 3 * BUSY_MONTH * per_meeting <= MAX_XML_BYTES
     assert MAX_XML_BYTES <= 4 * 1024 * 1024
 
-    head = (
-        "<?xml version='1.0' encoding='utf-8'?>"
-        "<d:multistatus xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:caldav'>"
-    )
-    tail = "</d:multistatus>"
-    count = (MAX_XML_BYTES - len(head) - len(tail)) // per_meeting
-    listing = (head + "".join(meeting(i) for i in range(count)) + tail).encode()
-    assert len(listing) <= MAX_XML_BYTES
-    events = events_from(listing)
+    count = (MAX_XML_BYTES - len(listing())) // per_meeting
+    raw = listing(*(meeting(i) for i in range(count)))
+    assert len(raw) <= MAX_XML_BYTES
+    events = events_from(raw)
     assert len(events) == count > 800
     assert events[0].summary == "Еженедельная встреча команды по планированию"
     assert len(events[0].attendees) == 5
+
+
+def test_a_recurring_series_counts_in_full_with_every_modified_occurrence() -> None:
+    # The figures the comment on MAX_XML_BYTES and the README give: a series of
+    # fifteen-attendee meetings passes the limit on its own at about 700
+    # modified occurrences, which no shorter range avoids.
+    per_override = len(listing(series(1))) - len(listing(series(0)))
+    fit = (MAX_XML_BYTES - len(listing(series(0)))) // per_override
+    assert 2_700 < per_override < 3_100
+    assert 650 < fit < 750
+
+    events = events_from(listing(series(fit)))
+    assert len(events) == fit + 1
+    assert len({event.href for event in events}) == 1
+    with pytest.raises(CalDAVError) as exc_info:
+        events_from(listing(series(fit + 1)))
+    assert str(exc_info.value).endswith(SERIES_TOO_LARGE)
 
 
 # -- UTF-8 only ----------------------------------------------------------------
