@@ -21,7 +21,7 @@ pip install -e '.[dev]'
 hermes_yandex_calendar/
   ical.py       # iCalendar (RFC 5545) parsing/serialization, no Hermes imports
   caldav.py     # CalDAV client for Yandex, no Hermes imports
-  config.py     # env -> client, calendar allow-list, action allow-list
+  config.py     # settings -> client, calendar allow-list, action allow-list
   _compat.py    # real-vs-shim host env helper
   tool.py       # tool schemas + handlers (JSON in, JSON string out)
   __init__.py   # register(ctx) — the plugin entry point
@@ -44,8 +44,20 @@ The plugin follows the Hermes plugin contract; a few of these are load-bearing:
   `CalDAVError`, which the handlers translate.
 - **Relative imports only** in `__init__.py` — the plugin loads as
   `hermes_plugins.yandex_calendar`.
-- **Untrusted XML** from the server is parsed with `defusedxml`, never `xml.etree`.
-- **Secrets** are resolved via `_compat.get_provider_env`; never log their values.
+- **Nothing beyond `httpx` and the standard library.** The recommended installs copy
+  only the plugin directory, so nothing else would be installed; keep it that way.
+- **Untrusted XML** from the server is parsed only through `_parse_xml` in
+  `caldav.py`. It refuses any DTD, any document that is not UTF-8 or is larger than
+  `MAX_XML_BYTES`, any element nested deeper than `MAX_XML_DEPTH`, more than
+  `MAX_XML_NAMES` distinct names, and any namespace URI longer than
+  `MAX_NAMESPACE_URI_CHARS` or not in ASCII, and refuses to parse at all
+  on an Expat older than `MIN_EXPAT_VERSION`. It spells each distinct element and
+  attribute name once, as ElementTree's own parser does, so a namespace URI is not
+  copied into every element that uses it. Responses are read only at the top of a
+  multistatus.
+- **Settings and secrets** are read only through `_compat.get_provider_env`:
+  Hermes' own helper inside Hermes, an environment-only stand-in outside it. The
+  plugin never opens a `.env` file itself. Never log secret values.
 
 ## Checks
 

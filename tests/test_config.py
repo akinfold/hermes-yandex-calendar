@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 
 from hermes_yandex_calendar import config
-from hermes_yandex_calendar._compat import get_provider_env
+from hermes_yandex_calendar._compat import HERMES_AVAILABLE, get_provider_env
 
 
 def test_credentials_present_false_when_unset(monkeypatch):
     monkeypatch.delenv(config.ENV_LOGIN, raising=False)
     monkeypatch.delenv(config.ENV_PASSWORD, raising=False)
-    # ensure the ~/.hermes/.env fallback can't accidentally supply creds
+    # inside Hermes, a profile's .env could supply them
     monkeypatch.setattr(config, "get_provider_env", lambda name: "")
     assert config.credentials_present() is False
 
@@ -120,10 +120,14 @@ def test_allowed_actions_drops_unknown_names(monkeypatch):
     assert config.allowed_actions() == {"list_events"}
 
 
-def test_get_provider_env_reads_hermes_env_file(monkeypatch, tmp_path):
+@pytest.mark.skipif(HERMES_AVAILABLE, reason="inside Hermes, Hermes' own helper resolves .env")
+def test_get_provider_env_outside_hermes_reads_no_env_file(monkeypatch, tmp_path):
+    """Only Hermes resolves a profile's .env file; the shim never opens one."""
     monkeypatch.delenv("YC_FROM_FILE", raising=False)
     hermes_dir = tmp_path / ".hermes"
     hermes_dir.mkdir()
     (hermes_dir / ".env").write_text('YC_FROM_FILE="secret"\n# comment\nOTHER=1\n')
-    monkeypatch.setattr("hermes_yandex_calendar._compat.Path.home", lambda: tmp_path)
-    assert get_provider_env("YC_FROM_FILE") == "secret"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    monkeypatch.chdir(tmp_path)
+    assert get_provider_env("YC_FROM_FILE") == ""

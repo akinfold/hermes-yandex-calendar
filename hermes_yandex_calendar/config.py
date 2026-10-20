@@ -1,7 +1,10 @@
-"""Build a CalDAV client from the environment.
+"""Build a CalDAV client from the settings Hermes resolves.
 
-Secrets are resolved via :func:`get_provider_env` (env vars, then
-``~/.hermes/.env``). Nothing here logs secret values.
+Settings and secrets are read through Hermes' :func:`get_provider_env`, which
+resolves the active profile's settings and secrets: its environment variables
+first, then its ``.env`` file. The plugin opens no file itself. Outside Hermes,
+the shim in :mod:`._compat` reads the process environment only. Nothing here
+logs secret values.
 """
 
 from __future__ import annotations
@@ -61,7 +64,7 @@ __all__ = [
 
 
 def allowed_calendars() -> list[str]:
-    """The allow-list of calendars from the environment, or ``[]`` for all.
+    """The allow-list of calendars from ``YANDEX_CALENDAR_CALENDARS``, or ``[]`` for all.
 
     Order is preserved on purpose and is part of the contract: the first entry
     that matches a calendar names the default one. Never sort this, and never
@@ -97,7 +100,7 @@ def allowed_actions() -> frozenset[str]:
 
 
 class MissingCredentials(RuntimeError):
-    """Raised when required Yandex credentials are absent from the environment."""
+    """Raised when the required Yandex credentials are not set."""
 
 
 def credentials_present() -> bool:
@@ -106,7 +109,7 @@ def credentials_present() -> bool:
 
 
 def build_client() -> YandexCalDAVClient:
-    """Construct a :class:`YandexCalDAVClient` from environment credentials."""
+    """Construct a :class:`YandexCalDAVClient` from the settings get_provider_env resolves."""
     login = get_provider_env(ENV_LOGIN)
     password = get_provider_env(ENV_PASSWORD)
     if not login or not password:

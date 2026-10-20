@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from hermes_yandex_calendar.ical import Attendee, Event, build_calendar, parse_events
+from hermes_yandex_calendar.ical import Attendee, Event, _unfold, build_calendar, parse_events
 
 
 def test_parse_utc_event():
@@ -68,6 +68,22 @@ def test_unfolding_and_escaping():
     # RFC 5545 unfolding removes CRLF + one leading space and concatenates directly
     # (no space inserted) — the word split across the fold is rejoined.
     assert event.description == "line one\nline two; still here and folded tail"
+
+
+@pytest.mark.parametrize(
+    ("text", "lines"),
+    [
+        ("A:1\r\n b\r\n\tc\r\nD:2\r\n", ["A:1bc", "D:2", ""]),
+        ("A:1\r b\rC:3", ["A:1b", "C:3"]),
+        ("A:1\n  two\n \n x", ["A:1 twox"]),
+        (" first\n more", [" firstmore"]),
+        ("\n a\nB:2", ["a", "B:2"]),
+        ("A:1\n\n b", ["A:1", "b"]),
+    ],
+    ids=["crlf-and-tab", "cr", "one-space-only", "leading-space", "leading-break", "empty-line"],
+)
+def test_unfolding_joins_each_continuation_to_the_line_before(text: str, lines: list[str]) -> None:
+    assert _unfold(text) == lines
 
 
 def test_multiple_events():
@@ -407,7 +423,7 @@ def test_a_changed_time_falls_back_to_utc_when_the_zone_cannot_be_defined():
         + ZONED_ICS[ZONED_ICS.index("BEGIN:VEVENT") :]
     )
     event = parse_events(text)[0]
-    assert event.timezones == []
+    assert event.timezones == ()
     event.start = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
     out = vevent_of(build_calendar(event))
     assert "DTSTART:20260105T120000Z" in out
@@ -453,7 +469,7 @@ def test_remembered_lines_are_dropped_from_the_model_not_just_the_output():
 def test_an_event_built_from_scratch_remembers_nothing():
     event = Event(uid="new-1", start=datetime(2026, 1, 5, 9, 0, tzinfo=UTC))
     assert event.raw_dt_lines == {}
-    assert event.timezones == []
+    assert event.timezones == ()
     assert "DTSTART:20260105T090000Z" in build_calendar(event)
 
 
@@ -636,9 +652,16 @@ def test_one_shared_timezone_reaches_every_event_in_the_document():
     first, second = parse_events(text)
     for event in (first, second):
         assert "TZID:Europe/Berlin" in lines_of(build_calendar(event))
-    # each event owns its copy: editing one document's event cannot corrupt another
-    first.timezones.clear()
+    # One copy for the whole document, which cannot be edited in place, so
+    # changing one event's definitions cannot corrupt another's.
+    assert first.timezones is second.timezones
+    with pytest.raises(AttributeError):
+        first.timezones.clear()  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        first.timezones[0][0] = "BEGIN:VEVENT"  # type: ignore[index]
+    first.timezones = ()
     assert "TZID:Europe/Berlin" in lines_of(build_calendar(second))
+    assert "TZID:Europe/Berlin" not in lines_of(build_calendar(first))
 
 
 def test_calendar_level_properties_are_not_carried_over():

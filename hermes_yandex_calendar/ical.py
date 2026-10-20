@@ -32,6 +32,8 @@ No Hermes imports here so it stays unit-testable in isolation.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
@@ -110,13 +112,15 @@ class Event:
     # verbatim lines. They belong to the calendar rather than to one event, but
     # the model that leaves this class is a single Event, so every event parsed
     # from a document carries that document's definitions and can be rebuilt on
-    # its own without orphaning its TZID references.
+    # its own without orphaning its TZID references. They are tuples, shared by
+    # every event of the document: they cost the same however many events it
+    # holds, and no event can change another's.
     # Unlike ``raw_dt_lines`` this one IS a constructor argument: a copy made
     # with ``dataclasses.replace`` keeps the TZID references sitting in
     # ``raw_props``, so dropping the definitions would hand back exactly the
     # invalid document this field exists to prevent. A zone definition cannot
     # contradict the times stored beside it, so there is nothing to guard.
-    timezones: list[list[str]] = field(default_factory=list, compare=False, repr=False)
+    timezones: tuple[tuple[str, ...], ...] = field(default=(), compare=False, repr=False)
     # {"DTSTART"/"DTEND": TZID}, as parsed. Unlike the remembered lines this is
     # NOT forgotten when the time changes: the zone is what the event is
     # anchored to, not what it currently reads, and a caller who reschedules a
@@ -146,16 +150,19 @@ class Event:
 # --- line handling ---------------------------------------------------------
 
 
+#: A line break and the space or tab that make the next line a continuation.
+_FOLD = re.compile(r"\n[ \t]")
+
+
 def _unfold(text: str) -> list[str]:
-    """Undo RFC 5545 line folding: a line beginning with space/tab continues the prior."""
-    raw = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    lines: list[str] = []
-    for line in raw:
-        if line[:1] in (" ", "\t") and lines:
-            lines[-1] += line[1:]
-        else:
-            lines.append(line)
-    return lines
+    """Undo RFC 5545 line folding: a line beginning with space/tab continues the prior.
+
+    The folds go in one pass over the whole text. Adding each continuation to the
+    line before it would copy that line again for every continuation, a cost that
+    grows with the square of their number.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _FOLD.sub("", text).split("\n")
 
 
 def _fold(line: str) -> str:
@@ -372,15 +379,16 @@ def parse_events(text: str) -> list[Event]:
     parameters name. Nothing else outside the VEVENTs is kept.
     """
     lines = _unfold(text)
-    timezones = _parse_timezones(lines)
+    # One immutable copy for all the events: a copy each would cost the number of
+    # events times the size of the definitions, and none can be edited in place.
+    timezones = tuple(tuple(component) for component in _parse_timezones(lines))
     events = _parse_vevents(lines)
     for event in events:
-        # a copy each: editing one event must not reach the others
-        event.timezones = [list(component) for component in timezones]
+        event.timezones = timezones
     return events
 
 
-def _timezone_key(component: list[str]) -> str:
+def _timezone_key(component: Sequence[str]) -> str:
     """The TZID this VTIMEZONE defines, or its whole text when it names none."""
     for line in component[1:]:
         name, _params, value = _split_prop(line)

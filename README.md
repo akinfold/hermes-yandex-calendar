@@ -81,6 +81,21 @@ Up to seven standalone tools, in the `yandex_calendar` toolset:
 | `yandex_calendar_move_event` | Move an event to another calendar, contents intact. |
 | `yandex_calendar_delete_event` | Delete an event by `href`. Idempotent: an `href` that no longer exists, or never did, is also reported as `deleted: true`. |
 
+**What the tools set off on Yandex's side.** They act as your account, and
+Yandex treats their changes like any other:
+
+- Adding attendees, to a new event or an existing one, makes Yandex email each
+  of them an invitation from your account.
+- An answer given with `yandex_calendar_respond_event` is your reply to the
+  invitation, and Yandex may notify the organizer of it.
+- `yandex_calendar_delete_event` removes the event from the server; the plugin
+  keeps no copy of it.
+- Changing, moving or deleting a meeting with attendees may also make Yandex
+  notify them.
+
+Every tool is available until `YANDEX_CALENDAR_ACTIONS` says otherwise — see
+[Restricting what the agent can do](#restricting-what-the-agent-can-do).
+
 **Recurring events are not expanded.** `yandex_calendar_list_events` runs a plain
 time-range query and reports each event as the server stores it. A recurring series
 is listed once, with the `start`/`end` of its *first* occurrence — which can lie well
@@ -133,8 +148,10 @@ out of reach with `YANDEX_CALENDAR_CALENDARS`.
 | `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendars, e.g. `Work,Personal`. **The order matters: the first entry that matches a calendar makes it the default**, the one an unqualified create or list uses, and the listing follows the same order. Each entry is a calendar name or the last segment of its `href` (e.g. `events-12345`), matched case-insensitively; a full `href` is not accepted here. An entry that matches nothing is ignored and claims no position, and if none match, `yandex_calendar_list_calendars` returns an empty list while every other tool fails with `No calendars available matching …`. |
 | `YANDEX_CALENDAR_ACTIONS` | no | *(all)* | Comma-separated allow-list of actions the agent may perform — see below. |
 
-Credentials are read from the environment first, then from `~/.hermes/.env`, so they
-work in gateway and subprocess runs. Secret values are never logged.
+The plugin opens no file itself. It reads these settings through Hermes'
+`get_provider_env`, which resolves the active profile's settings and secrets: its
+environment variables first, then its `.env` file (`~/.hermes/.env` for the default
+profile). Secret values are never logged.
 
 Dates and times are ISO 8601 (`2026-07-25` or `2026-07-25T14:00:00+03:00`); a datetime
 without an offset is treated as UTC.
@@ -205,6 +222,56 @@ at all. The list is applied when the plugin loads: restart Hermes after changing
 The default remains `all` for compatibility with existing installations. This is a
 trusted-agent mode, not the recommended starting point for a new deployment.
 
+## Requirements
+
+- Hermes Agent. Checked on every pull request, weekly, and before every release
+  against Hermes v2026.9.24, the latest Hermes release and Hermes `main`, each
+  installed by its official installer.
+- Python `>= 3.11`; the tests run on **3.11–3.14**.
+- The Python package `httpx >= 0.24`, which Hermes itself depends on. Option B
+  (PyPI) installs it; options A and C use the copy Hermes already has.
+- Expat 2.4.5 or newer in the Python that runs Hermes. On an older Expat the
+  plugin refuses to parse the server's XML at all, naming the version it found,
+  so it can list neither calendars nor events.
+
+  Hermes' current installer brings its own Python, with a recent Expat. To
+  check it anyway, use the interpreter `<environment>/bin/python`, where
+  `<environment>` is the `packages.venv.environment` value in
+  `~/.hermes/installs/<id>/facts.json`. A Hermes in the older layout (see
+  Option B below) runs on the Python its installer found:
+
+  ```bash
+  ~/.hermes/hermes-agent/venv/bin/python -c "import pyexpat; print(pyexpat.EXPAT_VERSION)"
+  ```
+
+  Every CPython release from 3.11.0 bundles a newer Expat. A distribution's
+  own Python uses the system libexpat instead, and current distributions ship
+  one new enough: 2.5.0 on Debian 12 (where the installer of Hermes v2026.9.24
+  picks the system `python3.11`) and RHEL 9, 2.4.7 on Ubuntu 22.04. Older
+  releases ship an older one: RHEL 8 before its 2.5.0 update, 2.2.10 on
+  Debian 11, 2.2.9 on Ubuntu 20.04. These numbers come from the distributions'
+  package versions, not from CI. Distributions backport security fixes without
+  raising the version, and the plugin goes by the number alone.
+
+  On an older Expat, `hermes update` moves Hermes onto the current installer's
+  own Python (Option B users: switch to Option A first, see below). To stay on
+  the older layout, run `~/.hermes/bin/uv python install 3.11` and re-run the
+  v2026.9.24 installer, which then builds its venv on uv's Python.
+- The plugin parses the server's XML with the standard library. It refuses,
+  saying why, a response that declares a DTD, is not UTF-8, nests its elements
+  more than 32 deep, uses more than 256 distinct element and attribute names, or
+  declares a namespace URI longer than 128 characters or not in ASCII (CalDAV's
+  are short, such as `DAV:`), and an XML document larger than 2 MiB.
+  Only a list of events gets that large: it carries the full text of every
+  event in the range, about 2.5 KB for a meeting with five attendees, so 2 MiB
+  holds over 800 such meetings, and a month with ten of them every working day
+  comes to about 550 KB. Asked for more,
+  `yandex_calendar_list_events` answers that the listing is too large and to
+  list a shorter time range. A recurring event counts in full, with every
+  modified occurrence it has, whichever range those fall in: about 700
+  modified occurrences of a meeting with fifteen attendees pass 2 MiB on their
+  own, and then no range that includes that series can be listed.
+
 ## Getting the app password
 
 CalDAV does not accept your normal account password.
@@ -245,7 +312,7 @@ with the directory named.
 For a Hermes whose Python environment you manage yourself — your own virtualenv,
 a Nix build: install `hermes-yandex-calendar` into that environment, then enable
 the plugin. Hermes finds it through the `hermes_agent.plugins` entry point, and
-`httpx` and `defusedxml` come along as its dependencies.
+`httpx` comes along as its dependency.
 
 ```bash
 hermes plugins enable yandex_calendar
@@ -298,15 +365,12 @@ asks for credentials here either: add them to `~/.hermes/.env` yourself.
 
 ### Dependencies on Options A and C
 
-Options A and C copy the plugin's sources and install nothing else, so `httpx` and
-`defusedxml` have to be in the environment Hermes runs in already. A standard
-Hermes install has both — the install check confirms it on Hermes v2026.9.24, the
-latest release and `main` — so there is nothing to add.
-
-If you built Hermes' environment yourself and it lacks one, the plugin fails to
-load with `No module named 'defusedxml'` (or `'httpx'`). Install the missing
-package into that environment the way you manage it, or install the plugin by
-Option B, which brings both with it.
+Options A and C copy the plugin's sources and install nothing else, and the plugin
+needs nothing more: besides the standard library it uses only `httpx`, one of
+Hermes' own core dependencies. The install check confirms that Hermes has it, and
+an Expat no older than [Requirements](#requirements) names, on every pull request,
+weekly, and before every release, on Hermes v2026.9.24, the latest release and
+`main`.
 
 ### Upgrading
 
@@ -408,11 +472,13 @@ Or keep all three out of the command line, in `~/.yandex-calendar-login`,
 `~/.yandex-calendar-app-password`, and `~/.yandex-calendar-attendees`, and just run
 `pytest -m e2e` — see `tests/e2e/conftest.py`.
 
-The suite builds its client exactly as the plugin does, so every `YANDEX_CALENDAR_*`
-setting it does not find in the environment (or, for the credentials, in those files)
-is looked up in `~/.hermes/.env` — `YANDEX_CALENDAR_BASE_URL` and
-`YANDEX_CALENDAR_CALENDARS` included. On a machine with Hermes already configured,
-`pytest -m e2e` therefore runs against that account instead of skipping.
+The suite builds its client exactly as the plugin does, through `get_provider_env`.
+In this repository's own environment, as above, that is the plugin's stand-in,
+which reads the process environment only: every `YANDEX_CALENDAR_*` setting the
+suite uses, `YANDEX_CALENDAR_BASE_URL` and `YANDEX_CALENDAR_CALENDARS` included,
+comes from there or, for the credentials, from those files. A Hermes configured on
+the same machine is not consulted. The workflow below runs the suite in Hermes'
+own Python instead, where Hermes' own `get_provider_env` resolves them.
 
 ### On GitHub Actions
 
@@ -437,8 +503,9 @@ real Hermes, set up by its official installer, by each option in
 the README's own commands, upgrades included — and then ask Hermes what it
 loaded: the plugin must be listed as enabled, load without error, and give the
 agent its tools. For Options A and C they also check that Hermes' own Python
-already has `httpx` and `defusedxml`, and they check that installing from the
-repository root still looks the way this README describes. A fast unit test keeps
+already has `httpx` and an Expat no older than [Requirements](#requirements)
+names, and they check that installing from the repository root still looks the
+way this README describes. A fast unit test keeps
 the commands in the tests and in this README identical.
 
 The **Install check** workflow runs them against Hermes v2026.9.24, the last
