@@ -460,7 +460,7 @@ EMPTY_MULTISTATUS = "<?xml version='1.0'?><d:multistatus xmlns:d='DAV:'></d:mult
 )
 def test_builds_the_tree_elementtree_builds(text: str) -> None:
     # The trusted fixtures of this suite, so ElementTree can serve as the oracle.
-    expected = ET.fromstring(text)
+    expected = ET.fromstring(text)  # nosec B314
     assert shape(_parse_xml(text.encode(), "test document")) == shape(expected)
 
 
@@ -493,7 +493,8 @@ def test_reads_the_same_events_and_calendars_from_caldav_shaped_responses() -> N
 
 def test_a_malformed_document_fails_with_expats_own_message() -> None:
     with pytest.raises(ET.ParseError) as expected:
-        ET.fromstring("<<not xml")
+        # A literal of this suite, parsed only for the message ElementTree gives.
+        ET.fromstring("<<not xml")  # nosec B314
     with pytest.raises(CalDAVError) as exc_info:
         calendars_from(b"<<not xml")
     assert str(exc_info.value) == f"Could not parse discovery response: {expected.value}"
