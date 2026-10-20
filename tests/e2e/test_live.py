@@ -82,23 +82,30 @@ def test_discover_and_list():
 def test_create_then_delete_roundtrip():
     marker = os.environ.get("YC_E2E_MARKER", "hermes-e2e")
     start = datetime.now(UTC) + timedelta(days=400)
+    # Cyrillic and a character outside Latin-1: the listing reads the REPORT
+    # body as UTF-8 whatever charset the server declares, and the GET reads it
+    # as the server declares, so an exact match pins both against Yandex.
+    summary = f"{marker} throwaway: проверка кодировки ёЁ жЖ €"
+    description = "Создано e2e-тестом, можно удалить. Created by hermes-yandex-calendar e2e."
     event = Event(
         uid="",
-        summary=f"{marker} throwaway",
+        summary=summary,
         start=start,
         end=start + timedelta(hours=1),
-        description="Created by hermes-yandex-calendar e2e; safe to delete.",
+        description=description,
     )
     with build_client() as client:
         created = client.create_event(event)
         assert created.href
         try:
             found = client.list_events(start - timedelta(hours=1), start + timedelta(hours=2))
-            assert any(marker in e.summary for e in found)
+            listed = [(e.summary, e.description) for e in found if e.uid == created.uid]
+            assert listed == [(summary, description)], [(e.uid, e.summary) for e in found]
 
             # edit it: add an attendee and mark it free
             fetched = client.get_event(created.href)
             assert fetched is not None
+            assert (fetched.summary, fetched.description) == (summary, description)
             guests = _attendee_emails()
             assert guests, f"no invitee addresses: set {ENV_ATTENDEES}"
             for i, guest in enumerate(guests, start=1):
