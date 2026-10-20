@@ -815,7 +815,8 @@ class YandexCalDAVClient:
         """Set the account owner's participation status (ACCEPTED/DECLINED/TENTATIVE).
 
         Flips the PARTSTAT on the ATTENDEE entry matching the logged-in address and
-        PUTs the event back, which the server processes as the invitation reply.
+        PUTs the event back, which is how a CalDAV client answers an invitation
+        (RFC 6638). Whether Yandex then notifies the organizer is not verified.
         Matching ignores case and Yandex's interchangeable mail domains, since the
         server rewrites e.g. ``@ya.ru`` addresses to their ``@yandex.ru`` form.
         """

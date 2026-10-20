@@ -87,7 +87,7 @@ Yandex treats their changes like any other:
 - Adding attendees, to a new event or an existing one, makes Yandex email each
   of them an invitation from your account.
 - An answer given with `yandex_calendar_respond_event` is your reply to the
-  invitation, and Yandex passes it on to the organizer.
+  invitation, and Yandex may notify the organizer of it.
 - `yandex_calendar_delete_event` removes the event from the server; the plugin
   keeps no copy of it.
 - Changing, moving or deleting a meeting with attendees may also make Yandex
