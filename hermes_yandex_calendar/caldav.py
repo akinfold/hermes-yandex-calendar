@@ -51,26 +51,37 @@ DEFAULT_BASE_URL = "https://caldav.yandex.ru"
 #: also bounds the time and memory of any cost in Expat not known yet. pyexpat
 #: holds the GIL while it parses, so a slow parse blocks the whole Hermes
 #: process; the cap keeps that short.
-#: Building the tree and reading the events from it then cost time and memory
-#: in proportion to the document, so the cap bounds them too: names are shared
-#: (_Names), responses are read only at the top level (_responses), and
-#: ical.parse_events unfolds lines in one pass and shares a document's time
-#: zone definitions among its events.
+#: Building the tree and reading the events from it stay within a small multiple
+#: of the document: names are spelled once each and at most MAX_XML_NAMES of them
+#: (_Names), namespace URIs are short ASCII (MAX_NAMESPACE_URI_CHARS), responses
+#: are read only at the top level (_responses), and ical.parse_events unfolds
+#: lines in one pass and shares a document's time zone definitions among its
+#: events.
 MAX_XML_BYTES = 2 * 1024 * 1024
 
-#: The longest namespace URI _parse_xml accepts, in characters. CalDAV's are
-#: short: "DAV:", "urn:ietf:params:xml:ns:caldav". Every element and attribute
-#: in a namespace carries the URI in its name, and pyexpat builds that name as
-#: a new string for each of them, so one long URI declared once and used by
-#: many short elements costs time far beyond the document's size: a 1 MiB URI
-#: used by 20 000 elements took six seconds to parse.
-MAX_NAMESPACE_URI_CHARS = 256
+#: The longest namespace URI _parse_xml accepts, in characters; it must also be
+#: ASCII. CalDAV's are short: "DAV:", "urn:ietf:params:xml:ns:caldav" (29). Every
+#: element and attribute in a namespace carries the URI in its name, and pyexpat
+#: builds that name as a new string for each of them — for attributes before any
+#: handler here runs — so one long URI declared once and used by many short
+#: elements or attributes costs memory and time far beyond the document's size: a
+#: 1 MiB URI used by 20 000 elements took six seconds to parse. Python stores a
+#: string with one character outside the Basic Multilingual Plane at four bytes
+#: per character, hence ASCII only.
+MAX_NAMESPACE_URI_CHARS = 128
+
+#: The most distinct element and attribute names _parse_xml accepts in one
+#: document. CalDAV answers use a few dozen. Sharing a name only helps when it
+#: repeats; a document that gives every element a new name in a long namespace
+#: would otherwise still keep one copy of the URI per element.
+MAX_XML_NAMES = 256
 
 #: The deepest nesting of elements _parse_xml accepts. The answers this client
 #: reads are six levels deep at most (multistatus, response, propstat, prop,
-#: resourcetype, calendar). 2 MiB of open tags can nest hundreds of thousands
-#: deep, which took Expat 0.63 s and 186 MiB, four times the memory of a flat
-#: document that size.
+#: resourcetype, calendar). 2 MiB of open tags can nest about 300 000 deep,
+#: which took the previous _parse_xml half a second and twice the peak memory of
+#: 2 MiB of elements side by side, most of the difference in Expat's own record
+#: of the open tags.
 MAX_XML_DEPTH = 32
 
 #: The oldest Expat this plugin parses with: a safety margin on top of the
@@ -90,12 +101,13 @@ MAX_XML_DEPTH = 32
 MIN_EXPAT_VERSION = (2, 4, 5)
 
 #: What the refusal of an oversized calendar-query response adds. A recurring
-#: event is returned whole, so when even a short range is refused, one series is
-#: the cause, and the agent should say so rather than shorten the range again.
+#: event is returned whole, so when even a short range is refused, one event or
+#: series is the cause, and the agent should say so rather than shorten the
+#: range again.
 _LISTING_TOO_LARGE = (
     "; list a shorter time range. A recurring event comes back whole, with all its "
     "modified occurrences, whatever the range: if even one day is refused, a single "
-    "recurring series in this calendar is larger than the limit"
+    "event or recurring series in this calendar is larger than the limit"
 )
 
 #: Where the README explains which Expat the plugin needs.
@@ -242,9 +254,19 @@ class _Names(dict):
     Every element and attribute in a namespace carries its URI in its name. Spelled
     afresh for each of them, the names would make the tree hold a copy of the URI
     per element; shared, as ElementTree's own parser shares them, there is one.
+    At most :data:`MAX_XML_NAMES` distinct names are accepted.
     """
 
+    def __init__(self, what: str) -> None:
+        super().__init__()
+        self.what = what
+
     def __missing__(self, name: str) -> str:
+        if len(self) >= MAX_XML_NAMES:
+            raise CalDAVError(
+                f"Rejected {self.what}: it uses more than {MAX_XML_NAMES} distinct "
+                "element and attribute names"
+            )
         spelled = self[name] = _clark(name)
         return spelled
 
@@ -255,7 +277,7 @@ class _Tree:
     def __init__(self, what: str) -> None:
         self.what = what
         self.builder = ET.TreeBuilder()
-        self.names = _Names()
+        self.names = _Names(what)
         self.depth = 0
 
     def check_namespace(self, _prefix: str | None, uri: str | None) -> None:
@@ -264,6 +286,10 @@ class _Tree:
             raise CalDAVError(
                 f"Rejected {self.what}: it declares a namespace URI longer than "
                 f"{MAX_NAMESPACE_URI_CHARS} characters"
+            )
+        if uri and not uri.isascii():
+            raise CalDAVError(
+                f"Rejected {self.what}: it declares a namespace URI that is not ASCII"
             )
 
     def start(self, tag: str, attrib: dict[str, str]) -> None:
@@ -291,8 +317,9 @@ def _parse_xml(raw: bytes, what: str, *, if_too_large: str = "") -> ET.Element:
     *what* names the response in every error, and *if_too_large* is appended to
     the size refusal. The document must be UTF-8, whatever encoding it or the
     ``Content-Type`` header declares, and at most :data:`MAX_XML_BYTES` long;
-    its elements may nest at most :data:`MAX_XML_DEPTH` deep, and none of its
-    namespace URIs may be longer than :data:`MAX_NAMESPACE_URI_CHARS`.
+    its elements may nest at most :data:`MAX_XML_DEPTH` deep, it may use at most
+    :data:`MAX_XML_NAMES` distinct names, and its namespace URIs must be ASCII and
+    at most :data:`MAX_NAMESPACE_URI_CHARS` long.
     Entities can only be declared in a DTD, so refusing the DTD at
     ``<!DOCTYPE`` leaves no entity to expand (billion laughs, quadratic blowup)
     and no external entity or DTD to resolve; Expat itself never opens files or

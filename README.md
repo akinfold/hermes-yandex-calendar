@@ -259,8 +259,9 @@ trusted-agent mode, not the recommended starting point for a new deployment.
   v2026.9.24 installer, which then builds its venv on uv's Python.
 - The plugin parses the server's XML with the standard library. It refuses,
   saying why, a response that declares a DTD, is not UTF-8, nests its elements
-  more than 32 deep or declares a namespace URI longer than 256 characters
-  (CalDAV's are short, such as `DAV:`), and an XML document larger than 2 MiB.
+  more than 32 deep, uses more than 256 distinct element and attribute names, or
+  declares a namespace URI longer than 128 characters or not in ASCII (CalDAV's
+  are short, such as `DAV:`), and an XML document larger than 2 MiB.
   Only a list of events gets that large: it carries the full text of every
   event in the range, about 2.5 KB for a meeting with five attendees, so 2 MiB
   holds over 800 such meetings, and a month with ten of them every working day
