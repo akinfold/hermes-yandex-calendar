@@ -8,6 +8,8 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+![Yandex Calendar for Hermes Agent](https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/main/docs/banner.png)
+
 **Let your [Hermes Agent](https://hermes-agent.nousresearch.com) run your Yandex
 Calendar.** *"What's on my calendar next week?"* — *"Move the standup to Thursday
 and invite Ann."* — *"Decline the 4pm."* The agent reads and writes real events on
@@ -34,6 +36,26 @@ your real calendar, over CalDAV, with no third-party service in the middle.
 Checked on every pull request, weekly, and before every release against Hermes
 v2026.9.24, the latest Hermes release and Hermes `main`, each installed by its
 official installer; Python **3.11–3.14**.
+
+## Security and disclosures
+
+This is an independent community plugin, not affiliated with Yandex.
+
+- **Network and credentials.** Requests go to `caldav.yandex.ru`, or the HTTPS
+  endpoint in `YANDEX_CALENDAR_BASE_URL`, with `YANDEX_CALENDAR_LOGIN` and
+  `YANDEX_CALENDAR_APP_PASSWORD` supplied through Hermes.
+- **Account changes and notifications.** All seven tools, including delete,
+  are exposed by default unless `YANDEX_CALENDAR_ACTIONS` restricts them.
+  Start with `YANDEX_CALENDAR_ACTIONS=read` for read-only access. Changes act
+  as your Yandex account: adding attendees sends invitations from you, and
+  updating, answering, moving or deleting a meeting may notify its attendees.
+  Deletion removes the event from the server; the plugin keeps no backup.
+- **Untrusted content.** Event text, including invitations from other people,
+  is returned to the agent as tool output. See
+  [Security boundaries](#security-boundaries) for action and calendar limits.
+- **Other activity.** The plugin contacts no other endpoint and has no
+  telemetry, local file access, shell access or background process. It obtains
+  credentials through Hermes and does not maintain a separate credential store.
 
 ## Quick start
 
