@@ -1,4 +1,6 @@
-# hermes-yandex-calendar
+![Yandex Calendar for Hermes Agent](https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/main/docs/banner.png)
+
+# Yandex Calendar for Hermes Agent
 
 [![PyPI version](https://img.shields.io/pypi/v/hermes-yandex-calendar.svg)](https://pypi.org/project/hermes-yandex-calendar/)
 [![CI](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml)
@@ -8,7 +10,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-![Yandex Calendar for Hermes Agent](https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/main/docs/banner.png)
+[Quick start](#quick-start) · [Features](#the-tools) · [Configuration](#configuration) · [Installation](#installing-the-plugin-into-hermes) · [Security](#security-and-disclosures)
 
 **Let your [Hermes Agent](https://hermes-agent.nousresearch.com) run your Yandex
 Calendar.** *"What's on my calendar next week?"* — *"Move the standup to Thursday
