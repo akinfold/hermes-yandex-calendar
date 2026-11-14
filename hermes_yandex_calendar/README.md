@@ -1,0 +1,557 @@
+![Yandex Calendar for Hermes Agent](https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/main/docs/banner.png)
+
+# Yandex Calendar for Hermes Agent
+
+[![PyPI version](https://img.shields.io/pypi/v/hermes-yandex-calendar.svg)](https://pypi.org/project/hermes-yandex-calendar/)
+[![CI](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml)
+[![E2E (live)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/e2e.yml/badge.svg)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/e2e.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/badges/coverage.json&v=1)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml)
+[![CodeFactor](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar/badge)](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/akinfold/hermes-yandex-calendar/blob/main/LICENSE)
+
+[Quick start](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#quick-start) · [Features](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#the-tools) · [Configuration](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#configuration) · [Installation](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#installing-the-plugin-into-hermes) · [Security](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-and-disclosures)
+
+**Let your [Hermes Agent](https://hermes-agent.nousresearch.com) run your Yandex
+Calendar.** *"What's on my calendar next week?"* — *"Move the standup to Thursday
+and invite Ann."* — *"Decline the 4pm."* The agent reads and writes real events on
+your real calendar, over CalDAV, with no third-party service in the middle.
+
+- 📅 **Seven tools, one toolset** — list, create, update, RSVP, move between
+  calendars, delete, and enumerate the calendars themselves.
+- 🔒 **You choose what it may touch** — restrict it to specific calendars, and to
+  specific actions (`read`, `read,write`, …). A disallowed action is not in the
+  toolset at all.
+- 🛟 **Careful with your data** — recurrence rules, alarms, and properties this
+  plugin does not model survive every edit, and so does the time zone: a start or
+  end you leave alone is written back as the exact line it was stored as, and one
+  you do change is written in the same zone the event was already anchored to. A
+  weekly standup at 10:00 Berlin stays 10:00 Berlin whether you rename it or move
+  it to 11:00, instead of being flattened to a fixed UTC instant that drifts an
+  hour at the next changeover. An edit that would overwrite someone else's
+  concurrent change is refused; moves copy the resource byte for byte, and the
+  original goes only once the copy has been read back from the target *and* only
+  if nobody changed it in between.
+- 🔑 **App password, not your account password** — scoped to CalDAV, revocable in
+  one click.
+
+Checked on every pull request, weekly, and before every release against Hermes
+v2026.9.24, the latest Hermes release and Hermes `main`, each installed by its
+official installer; Python **3.11–3.14**.
+
+## Security and disclosures
+
+This is an independent community plugin, not affiliated with Yandex.
+
+- **Network and credentials.** Requests go to `caldav.yandex.ru`, or the HTTPS
+  endpoint in `YANDEX_CALENDAR_BASE_URL`, with `YANDEX_CALENDAR_LOGIN` and
+  `YANDEX_CALENDAR_APP_PASSWORD` supplied through Hermes.
+- **Account changes and notifications.** All seven tools, including delete,
+  are exposed by default unless `YANDEX_CALENDAR_ACTIONS` restricts them.
+  Start with `YANDEX_CALENDAR_ACTIONS=read` for read-only access. Changes act
+  as your Yandex account: adding attendees sends invitations from you, and
+  updating, answering, moving or deleting a meeting may notify its attendees.
+  Deletion removes the event from the server; the plugin keeps no backup.
+- **Untrusted content.** Event text, including invitations from other people,
+  is returned to the agent as tool output. See
+  [Security boundaries](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-boundaries) for action and calendar limits.
+- **Other activity.** The plugin contacts no other endpoint and has no
+  telemetry, local file access, shell access or background process. It obtains
+  credentials through Hermes and does not maintain a separate credential store.
+
+## Quick start
+
+```bash
+# 1. Install into Hermes (other ways: see Installing the plugin). It asks for
+#    your login and an app password, which comes from
+#    https://id.yandex.ru/security/app-passwords (scope: "Calendar (CalDAV)")
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable
+
+# 2. Skipped the questions, or installed another way? Add the credentials yourself:
+(umask 077 && printf 'YANDEX_CALENDAR_LOGIN=%s\nYANDEX_CALENDAR_APP_PASSWORD=%s\n' \
+  'you@yandex.ru' 'your-app-password' >> ~/.hermes/.env)
+chmod 600 ~/.hermes/.env
+```
+
+`--enable` writes the plugin's manifest name into `~/.hermes/config.yaml` for
+you, so there is nothing else to switch on:
+
+```yaml
+plugins:
+  enabled: [yandex_calendar]
+```
+
+Installing from PyPI or the drop-in archive leaves that to you — third-party
+plugins are off until they are listed there — and `hermes plugins enable
+yandex_calendar` does it.
+
+That's it. Ask the agent *"what do I have tomorrow?"* and it will tell you.
+
+> The backward-compatible default exposes every action, including delete. For a
+> new or untrusted agent setup, start with `YANDEX_CALENDAR_ACTIONS=read` — see
+> [Security boundaries](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-boundaries).
+
+## The tools
+
+Up to seven standalone tools, in the `yandex_calendar` toolset:
+
+| Tool | Purpose |
+|---|---|
+| `yandex_calendar_list_calendars` | List the calendars the plugin can use (name + `href`). |
+| `yandex_calendar_list_events` | List events in a time range (summary, start/end, location, description, attendees, busy status, and an `href`). |
+| `yandex_calendar_create_event` | Create an event (summary, start, optional end/location/description/all-day, attendees, busy status, target calendar). |
+| `yandex_calendar_update_event` | Edit an event by `href`: change fields, add/remove attendees, toggle busy/free; an empty string clears a text field. Recurrence rules, alarms, and the time zone of a start or end you leave alone are preserved, and a concurrent change by someone else is refused rather than overwritten. |
+| `yandex_calendar_respond_event` | Respond to a meeting invitation — accept, decline, or tentatively accept. |
+| `yandex_calendar_move_event` | Move an event to another calendar, contents intact. |
+| `yandex_calendar_delete_event` | Delete an event by `href`. Idempotent: an `href` that no longer exists, or never did, is also reported as `deleted: true`. |
+
+**What the tools set off on Yandex's side.** They act as your account, and
+Yandex treats their changes like any other:
+
+- Adding attendees, to a new event or an existing one, makes Yandex email each
+  of them an invitation from your account.
+- An answer given with `yandex_calendar_respond_event` is your reply to the
+  invitation, and Yandex may notify the organizer of it.
+- `yandex_calendar_delete_event` removes the event from the server; the plugin
+  keeps no copy of it.
+- Changing, moving or deleting a meeting with attendees may also make Yandex
+  notify them.
+
+Every tool is available until `YANDEX_CALENDAR_ACTIONS` says otherwise — see
+[Restricting what the agent can do](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#restricting-what-the-agent-can-do).
+
+**Recurring events are not expanded.** `yandex_calendar_list_events` runs a plain
+time-range query and reports each event as the server stores it. A recurring series
+is listed once, with the `start`/`end` of its *first* occurrence — which can lie well
+before the requested range — and its recurrence rule is not part of the output. A
+series whose individual occurrences were edited comes back as several entries sharing
+one `href`, and `update_event` and `respond_event` refuse such a resource rather than
+drop those occurrences; it can still be moved or deleted as a whole.
+
+Yandex Calendar has no public REST API, so this plugin speaks **CalDAV**
+(`https://caldav.yandex.ru`) directly — the same protocol Yandex's own docs point
+third-party clients at. Nothing is proxied through anyone else's servers.
+
+### Multiple calendars
+
+`yandex_calendar_list_events` and `yandex_calendar_create_event` take an optional
+`calendar` argument; `yandex_calendar_move_event` takes a required one, naming the
+destination. A calendar is named by its display **name** (as returned by
+`yandex_calendar_list_calendars`), by the last segment of its path (e.g.
+`events-12345`), or by its full `href` — names and path segments are matched
+case-insensitively. Omit the optional argument to use the default calendar.
+`update`, `respond`, `move`, and `delete` identify the event by its `event_href`,
+which already encodes the calendar it lives in.
+
+Restrict which calendars the plugin may touch with `YANDEX_CALENDAR_CALENDARS`, and
+put the one you want as the default first: that order is what
+`yandex_calendar_list_calendars` reports and what an unqualified write follows.
+Without the setting, the order the server returns stands.
+
+> **Changed in 0.5.0.** Until then the order of that setting was ignored and the
+> default was whichever allowed calendar the server happened to list first. If you
+> set `YANDEX_CALENDAR_CALENDARS` and relied on that, check which calendar your value
+> names first before upgrading — it is the one events will go to now. An entry that
+> matches nothing is skipped, so a typo in first position hands the default to the
+> next entry that does match.
+
+Some Yandex calendars — holidays and birthdays, for instance — are read-only, yet they
+are listed like any other and the server answers a write into them with success while
+storing nothing. `yandex_calendar_move_event` catches this, because it reads the copy
+back and leaves the original where it was, but `yandex_calendar_create_event` does not:
+it reports `created: true` and an `href` at which nothing exists. Keep such calendars
+out of reach with `YANDEX_CALENDAR_CALENDARS`.
+
+## Configuration
+
+| Env var | Required | Default | Meaning |
+|---|---|---|---|
+| `YANDEX_CALENDAR_LOGIN` | yes | — | Yandex login / email. |
+| `YANDEX_CALENDAR_APP_PASSWORD` | yes | — | App password for CalDAV — an account password will not work. |
+| `YANDEX_CALENDAR_BASE_URL` | no | `https://caldav.yandex.ru` | HTTPS override for self-hosted / testing. |
+| `YANDEX_CALENDAR_CALENDARS` | no | *(all)* | Comma-separated allow-list of calendars, e.g. `Work,Personal`. **The order matters: the first entry that matches a calendar makes it the default**, the one an unqualified create or list uses, and the listing follows the same order. Each entry is a calendar name or the last segment of its `href` (e.g. `events-12345`), matched case-insensitively; a full `href` is not accepted here. An entry that matches nothing is ignored and claims no position, and if none match, `yandex_calendar_list_calendars` returns an empty list while every other tool fails with `No calendars available matching …`. |
+| `YANDEX_CALENDAR_ACTIONS` | no | *(all)* | Comma-separated allow-list of actions the agent may perform — see below. |
+
+The plugin opens no file itself. It reads these settings through Hermes'
+`get_provider_env`, which resolves the active profile's settings and secrets: its
+environment variables first, then its `.env` file (`~/.hermes/.env` for the default
+profile). Secret values are never logged.
+
+Dates and times are ISO 8601 (`2026-07-25` or `2026-07-25T14:00:00+03:00`); a datetime
+without an offset is treated as UTC.
+
+### Restricting what the agent can do
+
+`YANDEX_CALENDAR_ACTIONS` decides which of the seven tools are registered at all.
+A disallowed action is not merely refused at call time: the tool never appears in
+the agent's toolset, so it cannot be invoked, and the model is not tempted to try.
+
+Accepted values, comma-separated and case-insensitive — individual actions
+(`list_calendars`, `list_events`, `create_event`, `update_event`, `respond_event`,
+`move_event`, `delete_event`), full tool names (`yandex_calendar_delete_event`), or
+the shorthands:
+
+| Shorthand | Expands to |
+|---|---|
+| `read` | `list_calendars`, `list_events` |
+| `write` | `create_event`, `update_event`, `respond_event`, `move_event` |
+| `delete` | `delete_event` |
+| `all` | everything (the default) |
+
+```dotenv
+# Look, but don't touch:
+YANDEX_CALENDAR_ACTIONS=read
+
+# Full scheduling, but the agent can never delete anything:
+YANDEX_CALENDAR_ACTIONS=read,write
+
+# Just enough to answer invitations:
+YANDEX_CALENDAR_ACTIONS=list_events,respond_event
+```
+
+Leave it unset for all seven tools; an empty or whitespace-only value counts as
+unset, so `YANDEX_CALENDAR_ACTIONS=` does **not** mean "no tools". A name that
+matches nothing is ignored, so a typo can only ever withhold a tool, never grant one
+— and a non-blank value that names nothing recognisable therefore registers nothing
+at all. The list is applied when the plugin loads: restart Hermes after changing it.
+
+### Security boundaries
+
+- CalDAV credentials are sent only to the HTTPS origin configured by
+  `YANDEX_CALENDAR_BASE_URL`. Event hrefs pointing to HTTP or another origin are
+  rejected before a request is made. Cross-origin redirects do not receive the
+  authorization header.
+- `YANDEX_CALENDAR_CALENDARS` applies to both target calendars and direct event
+  operations (`update`, `respond`, `move`, and `delete`). Event paths are
+  canonicalized before the allow-list check and the same canonical path is sent;
+  moves validate both the source and destination calendar.
+- Calendar titles, descriptions, locations, and attendee names are untrusted input.
+  A capable agent can still act on misleading event content, so use `read` unless
+  the agent and every calendar writer are trusted. Attendees supplied to a tool
+  must be mailbox addresses, while server-provided calendar addresses are preserved
+  for compatible invitation updates. Line breaks are rejected during serialization
+  to prevent CRLF property injection.
+- Edits are conditional. The plugin writes an event back only if it still matches
+  the version it read (`If-Match` with the resource's `ETag`), so an agent cannot
+  silently overwrite a change you made meanwhile in the Yandex web UI, on a phone,
+  or from another client. When that happens the tool says so and the agent can
+  re-read the event and reapply its change. A move is conditional at the same
+  point: the original is removed only if it still matches the copy that was just
+  written, and if it changed in between the event is left in both calendars with a
+  message saying so, rather than losing that change.
+- The action allow-list limits the tools exposed to Hermes; it does not reduce the
+  privileges of the Yandex app password itself. Use a dedicated app password and,
+  for stronger isolation, a dedicated Yandex account.
+
+The default remains `all` for compatibility with existing installations. This is a
+trusted-agent mode, not the recommended starting point for a new deployment.
+
+## Requirements
+
+- Hermes Agent. Checked on every pull request, weekly, and before every release
+  against Hermes v2026.9.24, the latest Hermes release and Hermes `main`, each
+  installed by its official installer.
+- Python `>= 3.11`; the tests run on **3.11–3.14**.
+- The Python package `httpx >= 0.24`, which Hermes itself depends on. Option B
+  (PyPI) installs it; options A and C use the copy Hermes already has.
+- Expat 2.4.5 or newer in the Python that runs Hermes. On an older Expat the
+  plugin refuses to parse the server's XML at all, naming the version it found,
+  so it can list neither calendars nor events.
+
+  Hermes' current installer brings its own Python, with a recent Expat. To
+  check it anyway, use the interpreter `<environment>/bin/python`, where
+  `<environment>` is the `packages.venv.environment` value in
+  `~/.hermes/installs/<id>/facts.json`. A Hermes in the older layout (see
+  Option B below) runs on the Python its installer found:
+
+  ```bash
+  ~/.hermes/hermes-agent/venv/bin/python -c "import pyexpat; print(pyexpat.EXPAT_VERSION)"
+  ```
+
+  Every CPython release from 3.11.0 bundles a newer Expat. A distribution's
+  own Python uses the system libexpat instead, and current distributions ship
+  one new enough: 2.5.0 on Debian 12 (where the installer of Hermes v2026.9.24
+  picks the system `python3.11`) and RHEL 9, 2.4.7 on Ubuntu 22.04. Older
+  releases ship an older one: RHEL 8 before its 2.5.0 update, 2.2.10 on
+  Debian 11, 2.2.9 on Ubuntu 20.04. These numbers come from the distributions'
+  package versions, not from CI. Distributions backport security fixes without
+  raising the version, and the plugin goes by the number alone.
+
+  On an older Expat, `hermes update` moves Hermes onto the current installer's
+  own Python (Option B users: switch to Option A first, see below). To stay on
+  the older layout, run `~/.hermes/bin/uv python install 3.11` and re-run the
+  v2026.9.24 installer, which then builds its venv on uv's Python.
+- The plugin parses the server's XML with the standard library. It refuses,
+  saying why, a response that declares a DTD, is not UTF-8, nests its elements
+  more than 32 deep, uses more than 256 distinct element and attribute names, or
+  declares a namespace URI longer than 128 characters or not in ASCII (CalDAV's
+  are short, such as `DAV:`), and an XML document larger than 2 MiB.
+  Only a list of events gets that large: it carries the full text of every
+  event in the range, about 2.5 KB for a meeting with five attendees, so 2 MiB
+  holds over 800 such meetings, and a month with ten of them every working day
+  comes to about 550 KB. Asked for more,
+  `yandex_calendar_list_events` answers that the listing is too large and to
+  list a shorter time range. A recurring event counts in full, with every
+  modified occurrence it has, whichever range those fall in: about 700
+  modified occurrences of a meeting with fifteen attendees pass 2 MiB on their
+  own, and then no range that includes that series can be listed.
+
+## Getting the app password
+
+CalDAV does not accept your normal account password.
+
+1. Open <https://id.yandex.ru/security/app-passwords>.
+2. Add a password with the **Calendar (CalDAV)** scope.
+3. Copy it into `YANDEX_CALENDAR_APP_PASSWORD` — it is shown only once, and you can
+   revoke it at any time without touching your account password.
+
+If a tool answers *"Authentication failed"*, this is almost always the cause.
+
+## Installing the plugin into Hermes
+
+### Option A — from Git (recommended)
+
+```bash
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable
+```
+
+Note the `/hermes_yandex_calendar` at the end. The plugin lives in that directory,
+not at the repository root, and Hermes reads the manifest from whatever you point
+it at. Name the directory and the install is a plugin: Hermes prompts for
+`YANDEX_CALENDAR_LOGIN` and `YANDEX_CALENDAR_APP_PASSWORD`, installs under the
+manifest name `yandex_calendar`, and `--enable` enables that name. It also scans
+only that directory, so the tests and workflows in this repository stay out of the
+security report.
+
+Point it at the repository root instead and Hermes copies a directory with no
+manifest and no `register(ctx)` in it: it warns that it "may not be a valid Hermes
+plugin", asks for no credentials, and does not enable the plugin. What gives it
+away is `hermes plugins list`, which still shows `yandex_calendar` — the package
+nested in the clone is found — but with `not enabled` beside it. If you are in
+that state, remove `~/.hermes/plugins/hermes-yandex-calendar` and install again
+with the directory named.
+
+### Option B — from PyPI
+
+For a Hermes whose Python environment you manage yourself — your own virtualenv,
+a Nix build: install `hermes-yandex-calendar` into that environment, then enable
+the plugin. Hermes finds it through the `hermes_agent.plugins` entry point, and
+`httpx` comes along as its dependency.
+
+```bash
+hermes plugins enable yandex_calendar
+```
+
+**Not for a standard Hermes install.** Since 24 September 2026 the official
+installer runs Hermes from environments its package manager builds and replaces,
+and Hermes does not support adding packages to them by hand: use Option A or C.
+
+A Hermes in the older layout — one that runs from `~/.hermes/hermes-agent/venv`
+and keeps its own `uv` in `~/.hermes/bin`, with no `~/.hermes/installs` — takes
+the package like this:
+
+```bash
+~/.hermes/bin/uv pip install --python ~/.hermes/hermes-agent/venv/bin/python hermes-yandex-calendar
+hermes plugins enable yandex_calendar
+```
+
+That layout is what the installer of Hermes v2026.9.24, the last release to build
+it, sets up, and what anything installed before that date and not updated since
+looks like. Tell it by those directories, not by the version number Hermes
+reports.
+
+Switch such an install to Option A before you run `hermes update`: the update
+moves Hermes onto the new environments, and a package installed this way does
+not come along. The loss is silent: `yandex_calendar` stays enabled in the
+configuration, but its tools are gone, and neither the update nor
+`hermes doctor` mentions it. If you have already updated, run the Option A
+install now: it brings the tools back and keeps your credentials in
+`~/.hermes/.env`. A bare `pip install hermes-yandex-calendar` never reached
+Hermes at all — the `pip` on your `PATH` belongs to some other Python.
+
+Nothing asks for credentials on this path — add them to `~/.hermes/.env` as in
+the [Quick start](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#quick-start).
+
+### Option C — drop-in directory
+
+Download `hermes-yandex-calendar-plugin-<version>.zip` from the
+[latest release](https://github.com/akinfold/hermes-yandex-calendar/releases/latest)
+— not the wheel, the `.tar.gz`, or GitHub's "Source code" archives — then unzip it
+into `~/.hermes/plugins/` and enable it:
+
+```bash
+unzip hermes-yandex-calendar-plugin-<version>.zip -d ~/.hermes/plugins/
+hermes plugins enable yandex_calendar
+```
+
+You should end up with `~/.hermes/plugins/yandex_calendar/plugin.yaml`. Nothing
+asks for credentials here either: add them to `~/.hermes/.env` yourself.
+
+### Dependencies on Options A and C
+
+Options A and C copy the plugin's sources and install nothing else, and the plugin
+needs nothing more: besides the standard library it uses only `httpx`, one of
+Hermes' own core dependencies. The install check confirms that Hermes has it, and
+an Expat no older than [Requirements](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#requirements) names, on every pull request,
+weekly, and before every release, on Hermes v2026.9.24, the latest release and
+`main`.
+
+### Upgrading
+
+Upgrade the way you installed. Option A — Hermes v2026.9.24 (0.21.5) and later
+install the new version from the source they recorded:
+
+```bash
+hermes plugins update yandex_calendar
+```
+
+Older Hermes cannot update an install from a plugin directory: run the install
+command again with `--force`, which installs what the default branch holds now,
+replaces the installed copy, and keeps your credentials.
+
+```bash
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable --force
+```
+
+An install pinned to a commit with `--ref` stays on that commit through both:
+`hermes plugins update` refuses to move it, and `--force` without a new `--ref`
+installs the same commit again. `hermes plugins list` shows the pin in its Source
+column, as `git pinned@` and the first eight characters of the commit. To move
+it, run the install command with `--force` and the new commit, its full
+40-character SHA, in place of `<commit>`:
+
+```bash
+hermes plugins install akinfold/hermes-yandex-calendar/hermes_yandex_calendar --enable --force --ref <commit>
+```
+
+Each of these scans the new version again. Unlike a first install, none of them
+stops to ask when Hermes' security scan reports a caution: for an install from a
+plugin directory, as here, they accept it and go on. A dangerous verdict still
+stops them.
+
+Option C — unzip the new release's archive over the old one:
+
+```bash
+unzip -o hermes-yandex-calendar-plugin-<version>.zip -d ~/.hermes/plugins/
+```
+
+Option B — upgrade the package in the same environment: in the older layout,
+
+```bash
+~/.hermes/bin/uv pip install --upgrade --python ~/.hermes/hermes-agent/venv/bin/python hermes-yandex-calendar
+```
+
+Options A and C and their upgrades, moving a pinned install included, are
+checked before every release by installing the build into a real Hermes exactly
+as written here: Hermes v2026.9.24, the latest release, and `main`, each set up
+by its own official installer. The Option B install is checked against Hermes
+v2026.9.24, the last release whose installer builds the older layout. See
+[Checking the install paths](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#checking-the-install-paths).
+
+## Development
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+ruff check . && ruff format --check .
+pytest                       # unit tests, no network
+```
+
+## Running the live E2E tests
+
+The `e2e`-marked tests hit a real Yandex account and are deselected by default.
+They create, edit, move, and then delete throwaway events 400–402 days out, named
+with the `hermes-e2e` prefix (`YC_E2E_MARKER` overrides it). Most land in the default
+calendar; the move test also drops a short-lived probe event into your other
+calendars, one at a time, until it finds one that accepts it, and then moves an event
+there. Everything is deleted again, so a successful run leaves nothing behind — but
+the attendees they invite do receive an invitation, so use addresses you own.
+
+### Locally
+
+```bash
+YANDEX_CALENDAR_LOGIN=you@yandex.ru \
+YANDEX_CALENDAR_APP_PASSWORD=xxxx \
+YC_E2E_ATTENDEES=you+guest@yandex.ru \
+pytest -m e2e
+```
+
+`YC_E2E_ATTENDEES` is the comma-separated list of addresses the throwaway event
+invites, and each one really is emailed an invitation — so list mailboxes you own.
+Omit it and the suite falls back to a `+e2e` sub-address of the account itself,
+which lands in your own inbox. That fallback needs `YANDEX_CALENDAR_LOGIN` in full
+e-mail form (`you@yandex.ru`); with a bare login there is nothing to derive it from
+and the round-trip test fails asking for `YC_E2E_ATTENDEES`. Two constraints, both learned the hard way against
+the live server:
+
+- **The addresses must exist.** A made-up one (`guest@example.com`) bounces back
+  into your mailbox.
+- **They must not resolve to the account itself.** Yandex canonicalises addresses
+  (`@ya.ru` → `@yandex.ru`) and drops an attendee that equals the `ORGANIZER`, so a
+  plain alias of your own login silently disappears and the round-trip check fails.
+  A `+tag` sub-address is delivered to the same mailbox but stays a distinct
+  attendee.
+
+Or keep all three out of the command line, in `~/.yandex-calendar-login`,
+`~/.yandex-calendar-app-password`, and `~/.yandex-calendar-attendees`, and just run
+`pytest -m e2e` — see `tests/e2e/conftest.py`.
+
+The suite builds its client exactly as the plugin does, through `get_provider_env`.
+In this repository's own environment, as above, that is the plugin's stand-in,
+which reads the process environment only: every `YANDEX_CALENDAR_*` setting the
+suite uses, `YANDEX_CALENDAR_BASE_URL` and `YANDEX_CALENDAR_CALENDARS` included,
+comes from there or, for the credentials, from those files. A Hermes configured on
+the same machine is not consulted. The workflow below runs the suite in Hermes'
+own Python instead, where Hermes' own `get_provider_env` resolves them.
+
+### On GitHub Actions
+
+The **E2E (live)** workflow is manual (`workflow_dispatch`). It reads
+`YANDEX_CALENDAR_LOGIN`, `YANDEX_CALENDAR_APP_PASSWORD`, and `YC_E2E_ATTENDEES`
+from the **secrets** of a GitHub Environment named `yandex-calendar-e2e`. All three
+must be secrets — the workflow reads nothing from environment variables, so a value
+defined as a variable arrives empty: without the credentials every test is skipped,
+and without `YC_E2E_ATTENDEES` the suite falls back to the `+e2e` sub-address. It
+runs the plugin inside a real Hermes, installed by its official installer: the
+latest Hermes release by default, and its `hermes` input switches to Hermes `main`
+or to no Hermes at all. With Hermes, the tests run in Hermes' own Python,
+with this checkout on its path rather than installed into Hermes' environment, and
+the run fails outright if the plugin cannot import Hermes, rather than testing the
+plugin's stand-ins instead.
+
+## Checking the install paths
+
+The `install`-marked tests in `tests/install/` install the built plugin into a
+real Hermes, set up by its official installer, by each option in
+[Installing the plugin into Hermes](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#installing-the-plugin-into-hermes) — running
+the README's own commands, upgrades included — and then ask Hermes what it
+loaded: the plugin must be listed as enabled, load without error, and give the
+agent its tools. For Options A and C they also check that Hermes' own Python
+already has `httpx` and an Expat no older than [Requirements](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#requirements)
+names, and they check that installing from the repository root still looks the
+way this README describes. A fast unit test keeps
+the commands in the tests and in this README identical.
+
+The **Install check** workflow runs them against Hermes v2026.9.24, the last
+release in the older layout, against the latest Hermes release, and against
+Hermes `main` — on every pull request, once a week, and on every release tag
+before anything is published: the GitHub Release and the PyPI upload both wait
+for it. They install into a real `~/.hermes`, so run them yourself only in a
+container or VM — see the docstring of `tests/install/test_install.py`.
+
+## Related Hermes plugins
+
+Part of a family of Yandex plugins for Hermes Agent:
+
+- [hermes-yandex-disk](https://github.com/akinfold/hermes-yandex-disk) — browse, read, write, and share files on Yandex Disk (REST API).
+- [hermes-yandex-mail](https://github.com/akinfold/hermes-yandex-mail) — search, read, flag, move, and delete Yandex Mail messages over IMAP, and send over SMTP when sending is switched on.
+- [hermes-yandex-search-api](https://github.com/akinfold/hermes-yandex-search-api) — Yandex web search backend and generative, cited answers for Hermes (Yandex Search API).
+
+## Contributing
+
+Issues and PRs are welcome — see [CONTRIBUTING.md](https://github.com/akinfold/hermes-yandex-calendar/blob/main/CONTRIBUTING.md) for the layout,
+the plugin contract rules worth knowing, and the release process.
+
+## License
+
+MIT — see [LICENSE](https://github.com/akinfold/hermes-yandex-calendar/blob/main/LICENSE).

@@ -8,9 +8,9 @@
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/badges/coverage.json&v=1)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml)
 [![CodeFactor](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar/badge)](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/akinfold/hermes-yandex-calendar/blob/main/LICENSE)
 
-[Quick start](#quick-start) · [Features](#the-tools) · [Configuration](#configuration) · [Installation](#installing-the-plugin-into-hermes) · [Security](#security-and-disclosures)
+[Quick start](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#quick-start) · [Features](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#the-tools) · [Configuration](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#configuration) · [Installation](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#installing-the-plugin-into-hermes) · [Security](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-and-disclosures)
 
 **Let your [Hermes Agent](https://hermes-agent.nousresearch.com) run your Yandex
 Calendar.** *"What's on my calendar next week?"* — *"Move the standup to Thursday
@@ -54,7 +54,7 @@ This is an independent community plugin, not affiliated with Yandex.
   Deletion removes the event from the server; the plugin keeps no backup.
 - **Untrusted content.** Event text, including invitations from other people,
   is returned to the agent as tool output. See
-  [Security boundaries](#security-boundaries) for action and calendar limits.
+  [Security boundaries](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-boundaries) for action and calendar limits.
 - **Other activity.** The plugin contacts no other endpoint and has no
   telemetry, local file access, shell access or background process. It obtains
   credentials through Hermes and does not maintain a separate credential store.
@@ -89,7 +89,7 @@ That's it. Ask the agent *"what do I have tomorrow?"* and it will tell you.
 
 > The backward-compatible default exposes every action, including delete. For a
 > new or untrusted agent setup, start with `YANDEX_CALENDAR_ACTIONS=read` — see
-> [Security boundaries](#security-boundaries).
+> [Security boundaries](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-boundaries).
 
 ## The tools
 
@@ -118,7 +118,7 @@ Yandex treats their changes like any other:
   notify them.
 
 Every tool is available until `YANDEX_CALENDAR_ACTIONS` says otherwise — see
-[Restricting what the agent can do](#restricting-what-the-agent-can-do).
+[Restricting what the agent can do](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#restricting-what-the-agent-can-do).
 
 **Recurring events are not expanded.** `yandex_calendar_list_events` runs a plain
 time-range query and reports each event as the server stores it. A recurring series
@@ -370,7 +370,7 @@ install now: it brings the tools back and keeps your credentials in
 Hermes at all — the `pip` on your `PATH` belongs to some other Python.
 
 Nothing asks for credentials on this path — add them to `~/.hermes/.env` as in
-the [Quick start](#quick-start).
+the [Quick start](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#quick-start).
 
 ### Option C — drop-in directory
 
@@ -392,7 +392,7 @@ asks for credentials here either: add them to `~/.hermes/.env` yourself.
 Options A and C copy the plugin's sources and install nothing else, and the plugin
 needs nothing more: besides the standard library it uses only `httpx`, one of
 Hermes' own core dependencies. The install check confirms that Hermes has it, and
-an Expat no older than [Requirements](#requirements) names, on every pull request,
+an Expat no older than [Requirements](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#requirements) names, on every pull request,
 weekly, and before every release, on Hermes v2026.9.24, the latest release and
 `main`.
 
@@ -446,7 +446,7 @@ checked before every release by installing the build into a real Hermes exactly
 as written here: Hermes v2026.9.24, the latest release, and `main`, each set up
 by its own official installer. The Option B install is checked against Hermes
 v2026.9.24, the last release whose installer builds the older layout. See
-[Checking the install paths](#checking-the-install-paths).
+[Checking the install paths](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#checking-the-install-paths).
 
 ## Development
 
@@ -523,11 +523,11 @@ plugin's stand-ins instead.
 
 The `install`-marked tests in `tests/install/` install the built plugin into a
 real Hermes, set up by its official installer, by each option in
-[Installing the plugin into Hermes](#installing-the-plugin-into-hermes) — running
+[Installing the plugin into Hermes](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#installing-the-plugin-into-hermes) — running
 the README's own commands, upgrades included — and then ask Hermes what it
 loaded: the plugin must be listed as enabled, load without error, and give the
 agent its tools. For Options A and C they also check that Hermes' own Python
-already has `httpx` and an Expat no older than [Requirements](#requirements)
+already has `httpx` and an Expat no older than [Requirements](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#requirements)
 names, and they check that installing from the repository root still looks the
 way this README describes. A fast unit test keeps
 the commands in the tests and in this README identical.
@@ -549,9 +549,9 @@ Part of a family of Yandex plugins for Hermes Agent:
 
 ## Contributing
 
-Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the layout,
+Issues and PRs are welcome — see [CONTRIBUTING.md](https://github.com/akinfold/hermes-yandex-calendar/blob/main/CONTRIBUTING.md) for the layout,
 the plugin contract rules worth knowing, and the release process.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/akinfold/hermes-yandex-calendar/blob/main/LICENSE).
