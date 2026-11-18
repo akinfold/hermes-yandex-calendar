@@ -1,14 +1,8 @@
-![Yandex Calendar for Hermes Agent](https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/main/docs/banner.png)
+![Yandex Calendar for Hermes Agent](https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/51f25e89fcd71c7966892e58b11f3193ee663137/docs/banner.jpg)
 
 # Yandex Calendar for Hermes Agent
 
-[![PyPI version](https://img.shields.io/pypi/v/hermes-yandex-calendar.svg)](https://pypi.org/project/hermes-yandex-calendar/)
-[![CI](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml)
-[![E2E (live)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/e2e.yml/badge.svg)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/e2e.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/badges/coverage.json&v=1)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml)
-[![CodeFactor](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar/badge)](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/akinfold/hermes-yandex-calendar/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/hermes-yandex-calendar.svg)](https://pypi.org/project/hermes-yandex-calendar/) [![CI](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml) [![E2E (live)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/e2e.yml/badge.svg)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/e2e.yml) [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/akinfold/hermes-yandex-calendar/badges/coverage.json&v=1)](https://github.com/akinfold/hermes-yandex-calendar/actions/workflows/ci.yml) [![CodeFactor](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar/badge)](https://www.codefactor.io/repository/github/akinfold/hermes-yandex-calendar) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/akinfold/hermes-yandex-calendar/blob/main/LICENSE)
 
 [Quick start](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#quick-start) · [Features](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#the-tools) · [Configuration](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#configuration) · [Installation](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#installing-the-plugin-into-hermes) · [Security](https://github.com/akinfold/hermes-yandex-calendar/blob/main/README.md#security-and-disclosures)
 
