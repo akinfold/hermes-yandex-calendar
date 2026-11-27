@@ -171,9 +171,10 @@ The plugin opens no file itself. It reads these settings through Hermes'
 environment variables first, then its `.env` file (`~/.hermes/.env` for the default
 profile). Secret values are never logged.
 
-On Hermes 0.23.4 or later, run `hermes plugins config yandex_calendar` in a terminal
-to update your Yandex login and CalDAV app password. Hermes saves these values in the
-active profile's `.env` file.
+On Hermes 0.23.4 or later, if you installed the plugin with `hermes plugins install`
+or copied it into the plugins directory, run `hermes plugins config yandex_calendar`
+in a terminal to update your Yandex login and CalDAV app password. Hermes saves the
+values in the active profile's `.env` file. For PyPI installs, edit that file directly.
 
 Dates and times are ISO 8601 (`2026-07-25` or `2026-07-25T14:00:00+03:00`); a datetime
 without an offset is treated as UTC.
